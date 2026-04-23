@@ -88,6 +88,170 @@
 
 ### 4. 任务（block / ddl / todo）
 
+#### 4.0 任务数据模型
+
+> 三类任务共享一个 `/tasks` 集合，以 `type` 字段区分。
+
+---
+
+##### 4.0.1 通用字段（三类任务均有）
+
+| 字段 | 类型 | 读写 | 说明 |
+|---|---|---|---|
+| `id` | `string` | 只读 | 任务唯一标识（UUID） |
+| `type` | `"block" \| "ddl" \| "todo"` | 创建时必填，不可修改 | 任务类型 |
+| `title` | `string` | 必填 | 任务标题 |
+| `description` | `string?` | 可选 | 备注说明，默认空字符串 |
+| `tag_ids` | `string[]` | 可选 | 关联标签 ID 列表，默认 `[]` |
+| `status` | `"active" \| "completed" \| "cancelled" \| "overdue"` | 只读 | 任务状态；`overdue` 由服务端在截止时间过期后自动标记（block/ddl 按 `end_at`/`due_at`；todo 按 `due_at`，无 `due_at` 则永不 overdue） |
+| `remind_at` | `datetime?` | 可选 | 提醒时间（ISO 8601 UTC）；`null` 表示不提醒；服务端仅持久化，提醒由客户端本地调度 |
+| `focus_total_seconds` | `number` | 只读 | 关联番茄钟会话的累计专注秒数 |
+| `created_at` | `datetime` | 只读 | 创建时间（UTC） |
+| `updated_at` | `datetime` | 只读 | 最近更新时间（UTC） |
+
+---
+
+##### 4.0.2 Block —— 固定时间段任务
+
+> 适用场景：上课、会议、健身等有明确起止时间的占用块。
+
+在通用字段基础上，额外包含：
+
+| 字段 | 类型 | 读写 | 说明 |
+|---|---|---|---|
+| `start_at` | `datetime` | 必填 | 任务开始时间（UTC） |
+| `end_at` | `datetime` | 必填 | 任务结束时间（UTC）；须严格晚于 `start_at` |
+
+**约束**
+- `end_at > start_at`，否则返回 `400 INVALID_TIME_RANGE`
+- `status` 初始为 `active`；可手动 `complete` / `cancel`；到达 `end_at` 后若未完成，服务端将其标记为 `overdue`
+
+**完整示例（响应）**
+```json
+{
+  "id": "blk_001",
+  "type": "block",
+  "title": "高数课",
+  "description": "第五章极限",
+  "tag_ids": ["tag_study"],
+  "status": "active",
+  "start_at": "2026-04-22T08:00:00Z",
+  "end_at": "2026-04-22T09:40:00Z",
+  "remind_at": "2026-04-22T07:50:00Z",
+  "focus_total_seconds": 0,
+  "created_at": "2026-04-21T12:00:00Z",
+  "updated_at": "2026-04-21T12:00:00Z"
+}
+```
+
+---
+
+##### 4.0.3 DDL —— 截止时间任务
+
+> 适用场景：作业提交、项目汇报等仅有最终期限的任务。
+
+在通用字段基础上，额外包含：
+
+| 字段 | 类型 | 读写 | 说明 |
+|---|---|---|---|
+| `due_at` | `datetime` | 必填 | 截止时间（UTC）；超时后 `status` 自动变为 `overdue` |
+
+**约束**
+- 无 `start_at`；日历视图中该类任务以「截止点」形式呈现（`all_day` 或具体时刻，由客户端决定展示方式）
+- `postpone` 操作仅更新 `due_at`，同时重置 `status` 为 `active`
+
+**完整示例（响应）**
+```json
+{
+  "id": "ddl_001",
+  "type": "ddl",
+  "title": "提交数据库作业",
+  "description": "",
+  "tag_ids": ["tag_study"],
+  "status": "active",
+  "due_at": "2026-04-25T16:00:00Z",
+  "remind_at": "2026-04-25T14:00:00Z",
+  "focus_total_seconds": 3600,
+  "created_at": "2026-04-20T09:00:00Z",
+  "updated_at": "2026-04-20T09:00:00Z"
+}
+```
+
+---
+
+##### 4.0.4 Todo —— 待办任务
+
+> 适用场景：自由安排的学习、生活待办，可拆解为子任务或设定预期时长。
+
+在通用字段基础上，额外包含：
+
+| 字段 | 类型 | 读写 | 说明 |
+|---|---|---|---|
+| `due_at` | `datetime?` | 可选 | 可选截止时间；有值时超时后标记为 `overdue` |
+| `expected_minutes` | `number?` | 可选 | 预期投入时长（分钟，正整数）；与子任务可共存 |
+| `subtasks` | `SubTask[]` | 可选 | 子任务列表，默认 `[]`；创建时可一并提交，后续通过子任务接口（§5）增删改 |
+
+**SubTask 子任务结构**
+
+| 字段 | 类型 | 读写 | 说明 |
+|---|---|---|---|
+| `id` | `string` | 只读 | 子任务唯一标识（UUID） |
+| `title` | `string` | 必填 | 子任务标题 |
+| `done` | `boolean` | 可读写 | 是否完成，默认 `false` |
+| `order` | `number` | 可读写 | 排序序号（升序展示），从 1 开始 |
+
+**约束**
+- 无子任务且 `done` 逻辑不适用时，通过 `POST /tasks/{taskId}/complete` 手动完成
+- 当所有子任务均 `done: true` 时，客户端可显示「标记完成」按钮（见主页设计）
+- `expected_minutes` 与 `focus_total_seconds` 可共同用于进度展示（已专注 / 预期时长）
+
+**完整示例（响应）**
+```json
+{
+  "id": "todo_001",
+  "type": "todo",
+  "title": "复习线性代数",
+  "description": "期末复习",
+  "tag_ids": ["tag_study"],
+  "status": "active",
+  "due_at": "2026-04-28T00:00:00Z",
+  "remind_at": "2026-04-27T20:00:00Z",
+  "expected_minutes": 120,
+  "subtasks": [
+    { "id": "sub_001", "title": "第一章例题", "done": true,  "order": 1 },
+    { "id": "sub_002", "title": "第二章习题", "done": false, "order": 2 },
+    { "id": "sub_003", "title": "真题模拟",   "done": false, "order": 3 }
+  ],
+  "focus_total_seconds": 5400,
+  "created_at": "2026-04-20T10:00:00Z",
+  "updated_at": "2026-04-21T18:30:00Z"
+}
+```
+
+---
+
+##### 4.0.5 状态流转图
+
+```
+          ┌─────────────────────────────────────────┐
+          │                 active                  │
+          └────┬───────────┬───────────┬────────────┘
+               │           │           │
+      完成时间到达      手动 cancel   手动/弹窗 complete
+      (block end_at /      │           │
+       ddl|todo due_at)    ▼           ▼
+               │       cancelled   completed
+               ▼
+            overdue
+               │
+        postpone / snooze
+               │
+               ▼
+            active（due_at 更新）
+```
+
+---
+
 #### 4.1 创建任务
 
 - **POST** `/tasks`

@@ -1,0 +1,5 @@
+Django>=4.2,<5.0
+djangorestframework>=3.15
+djangorestframework-simplejwt>=5.3
+psycopg2-binary>=2.9        # 生产环境 PostgreSQL；开发可用 SQLite，删此行
+python-decouple>=3.8        # 可选，从 .env 读取配置
