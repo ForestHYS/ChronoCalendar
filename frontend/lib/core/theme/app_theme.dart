@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'app_colors.dart';
+import 'app_text_styles.dart';
 
 ThemeData buildAppTheme() {
   final base = ThemeData(
@@ -25,7 +26,8 @@ ThemeData buildAppTheme() {
       foregroundColor: AppColors.onSurface,
       elevation: 0,
       scrolledUnderElevation: 0,
-      centerTitle: false,
+      centerTitle: true,
+      titleTextStyle: AppTextStyles.appBarTitle,
     ),
     cardTheme: CardThemeData(
       color: AppColors.surfaceContainer,

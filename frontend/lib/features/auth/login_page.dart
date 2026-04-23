@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/theme/app_text_styles.dart';
 import '../../data/providers.dart';
 
 class LoginPage extends ConsumerStatefulWidget {
@@ -59,14 +60,10 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text(
+                    const Text(
                       '日程',
                       textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                            fontSize: 28,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.onSurface,
-                          ),
+                      style: AppTextStyles.appBarTitle,
                     ),
                     const SizedBox(height: 8),
                     Text(

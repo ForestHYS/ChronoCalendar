@@ -1,10 +1,17 @@
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 
 import '../core/utils/week_key.dart';
 import '../domain/models/tag.dart';
 import '../domain/models/task.dart';
 import '../domain/models/task_status.dart';
 import 'mock/mock_data.dart';
+
+/// 演示：上周某标签专注时长（秒），供环图使用。
+class TagFocusSlice {
+  const TagFocusSlice(this.tagId, this.seconds);
+  final String tagId;
+  final int seconds;
+}
 
 class TaskRepository extends ChangeNotifier {
   TaskRepository() {
@@ -24,6 +31,35 @@ class TaskRepository extends ChangeNotifier {
     } catch (_) {
       return null;
     }
+  }
+
+  void addTag({required String name, required Color color}) {
+    final n = name.trim();
+    if (n.isEmpty) return;
+    final id = 'tag_${DateTime.now().microsecondsSinceEpoch}';
+    _tags = [..._tags, Tag(id: id, name: n, color: color)];
+    notifyListeners();
+  }
+
+  void renameTag(String id, String name) {
+    final n = name.trim();
+    if (n.isEmpty) return;
+    _tags = _tags.map((t) => t.id == id ? Tag(id: t.id, name: n, color: t.color) : t).toList();
+    notifyListeners();
+  }
+
+  void recolorTag(String id, Color color) {
+    _tags = _tags.map((t) => t.id == id ? Tag(id: t.id, name: t.name, color: color) : t).toList();
+    notifyListeners();
+  }
+
+  void deleteTag(String id) {
+    _tags = _tags.where((t) => t.id != id).toList();
+    _tasks = _tasks.map((t) {
+      if (!t.tagIds.contains(id)) return t;
+      return t.copyWith(tagIds: t.tagIds.where((x) => x != id).toList());
+    }).toList();
+    notifyListeners();
   }
 
   Task? taskById(String id) {
@@ -70,6 +106,11 @@ class TaskRepository extends ChangeNotifier {
     return list;
   }
 
+  /// 主页「最近任务」：与 [upcomingTodayTomorrow] 同规则，最多 [limit] 条。
+  List<Task> recentTasksForHome({int limit = 3}) {
+    return upcomingTodayTomorrow().take(limit).toList();
+  }
+
   List<Task> todosByRecentUsage() {
     return _tasks
         .where((t) => t.type == TaskType.todo && t.status == TaskStatus.active)
@@ -82,6 +123,10 @@ class TaskRepository extends ChangeNotifier {
   int countCompletedThisWeek() {
     final wk = currentWeekKey;
     return _tasks.where((t) => t.status == TaskStatus.completed && t.completedAtWeekYear == wk).length;
+  }
+
+  int countCompletedTotal() {
+    return _tasks.where((t) => t.status == TaskStatus.completed).length;
   }
 
   int countPendingActive() {
@@ -110,17 +155,19 @@ class TaskRepository extends ChangeNotifier {
     return counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
   }
 
-  /// 演示：7 天堆叠柱状数据 [dayIndex][segment] -> 相对高度
-  List<List<double>> weeklyFocusStacksDemo() {
-    return [
-      [1.2, 0.6, 0.4],
-      [0.8, 1.0, 0.2],
-      [1.5, 0.3, 0.5],
-      [0.4, 0.9, 0.8],
-      [1.1, 0.5, 0.9],
-      [0.6, 1.2, 0.3],
-      [0.9, 0.7, 0.6],
+  /// 演示：上周按标签的专注秒数（// TODO: 对接真实统计接口）。
+  List<TagFocusSlice> lastWeekFocusSecondsByTag() {
+    return const [
+      TagFocusSlice('tag_learn', 12600),
+      TagFocusSlice('tag_work', 9000),
+      TagFocusSlice('tag_life', 4200),
+      TagFocusSlice('tag_other', 2100),
     ];
+  }
+
+  /// 演示：上周总专注时长（秒）。
+  int lastWeekTotalFocusSeconds() {
+    return lastWeekFocusSecondsByTag().fold(0, (a, b) => a + b.seconds);
   }
 
   void touchTask(String id) {

@@ -7,6 +7,7 @@ import '../../features/auth/login_page.dart';
 import '../../features/calendar/calendar_page.dart';
 import '../../features/home/home_page.dart';
 import '../../features/settings/settings_page.dart';
+import '../../features/settings/tag_manage_page.dart';
 import '../../features/shell/main_shell.dart';
 import '../../features/task_create/task_create_page.dart';
 import '../../features/task_detail/task_detail_page.dart';
@@ -89,6 +90,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           final id = state.pathParameters['id']!;
           return TaskDetailPage(taskId: id);
         },
+      ),
+      GoRoute(
+        path: '/settings/tags',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const TagManagePage(),
       ),
     ],
   );
