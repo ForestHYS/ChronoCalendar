@@ -10,6 +10,7 @@ List<Tag> buildInitialTags() {
     Tag(id: 'tag_learn', name: '学习', color: Color(0xFF3B82F6)),
     Tag(id: 'tag_work', name: '工作', color: Color(0xFF8B5CF6)),
     Tag(id: 'tag_life', name: '生活', color: Color(0xFFF59E0B)),
+    Tag(id: 'tag_other', name: '其它', color: Color(0xFFEC4899)),
   ];
 }
 
@@ -77,7 +78,7 @@ List<Task> buildInitialTasks(DateTime now) {
       '项目周会',
       today.add(const Duration(hours: 10)),
       today.add(const Duration(hours: 11)),
-      const ['tag_work'],
+      const ['tag_learn', 'tag_work', 'tag_life', 'tag_other'],
     ),
     ddl(
       't_ddl_1',

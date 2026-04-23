@@ -59,7 +59,7 @@ class MainShell extends StatelessWidget {
             ),
             _NavItem(
               icon: Icons.person_outline,
-              label: '设置',
+              label: '我的',
               selected: navigationShell.currentIndex == 3,
               onTap: () => navigationShell.goBranch(3),
             ),
