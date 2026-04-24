@@ -1,13 +1,17 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/ui/app_error_dialog.dart';
 import '../../data/providers.dart';
 import '../../data/task_repository.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
+import '../../domain/models/task_status.dart';
 
 class TaskDetailPage extends ConsumerStatefulWidget {
   /// [taskId] 为 `null` 时表示新建：首帧后以 **固定时段（block）** 插入草稿并进入编辑态。
@@ -32,17 +36,36 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     super.initState();
     if (widget.taskId != null) {
       _tid = widget.taskId;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        try {
+          await ref.read(taskRepositoryProvider).ensureTaskLoaded(widget.taskId!);
+          if (!mounted) return;
+          final t0 = ref.read(taskRepositoryProvider).taskById(widget.taskId!);
+          if (t0 != null) _fillControllers(t0);
+          setState(() {});
+        } catch (e) {
+          if (!mounted) return;
+          await showAppErrorDialog(context, title: '加载失败', error: e);
+        }
+      });
     } else {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted) return;
-        final id = ref.read(taskRepositoryProvider).createDraftTask(TaskType.block);
-        if (!mounted) return;
-        setState(() {
-          _tid = id;
-          _editing = true;
-        });
-        final t0 = ref.read(taskRepositoryProvider).taskById(id)!;
-        _fillControllers(t0);
+        try {
+          final id = await ref.read(taskRepositoryProvider).createDraftTask(TaskType.block);
+          if (!mounted) return;
+          setState(() {
+            _tid = id;
+            _editing = true;
+          });
+          final t0 = ref.read(taskRepositoryProvider).taskById(id)!;
+          _fillControllers(t0);
+        } catch (e) {
+          if (!mounted) return;
+          await showAppErrorDialog(context, title: '创建失败', error: e);
+          if (mounted) context.pop();
+        }
       });
     }
   }
@@ -61,7 +84,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     _expectedC.text = t.expectedMinutes?.toString() ?? '';
   }
 
-  void _switchTaskType(TaskRepository repo, Task t, TaskType nextType) {
+  Future<void> _switchTaskType(TaskRepository repo, Task t, TaskType nextType) async {
     if (t.type == nextType) return;
     final now = DateTime.now();
     Task n;
@@ -96,9 +119,15 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
         );
         break;
     }
-    repo.updateTask(n.copyWith(lastActivityAt: DateTime.now()));
-    _fillControllers(repo.taskById(t.id)!);
-    setState(() {});
+    try {
+      final newId = await repo.replaceTaskWithNewType(n);
+      if (!mounted) return;
+      setState(() => _tid = newId);
+      _fillControllers(repo.taskById(newId)!);
+    } catch (e) {
+      if (!mounted) return;
+      await showAppErrorDialog(context, title: '切换类型失败', error: e);
+    }
   }
 
   Future<DateTime?> _pickDateTime(DateTime? initial) async {
@@ -126,12 +155,16 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     );
     if (next.type == TaskType.todo) {
       final n = int.tryParse(_expectedC.text.trim());
-      next = next.copyWith(expectedMinutes: n);
+      next = next.copyWith(expectedMinutes: n, clearExpectedMinutes: n == null);
     }
-    ref.read(taskRepositoryProvider).updateTask(next);
-    setState(() => _editing = false);
-    if (mounted) {
+    try {
+      await ref.read(taskRepositoryProvider).updateTask(next);
+      if (!mounted) return;
+      setState(() => _editing = false);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已保存')));
+    } catch (e) {
+      if (!mounted) return;
+      await showAppErrorDialog(context, title: '保存失败', error: e);
     }
   }
 
@@ -152,9 +185,22 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
       ),
     );
     if (ok == true && mounted && _tid != null) {
-      ref.read(taskRepositoryProvider).deleteTask(_tid!);
-      context.pop();
+      try {
+        await ref.read(taskRepositoryProvider).deleteTask(_tid!);
+        if (mounted) context.pop();
+      } catch (e) {
+        if (mounted) await showAppErrorDialog(context, title: '删除失败', error: e);
+      }
     }
+  }
+
+  String _statusLabelCn(TaskStatus s) {
+    return switch (s) {
+      TaskStatus.active => '进行中',
+      TaskStatus.completed => '已完成',
+      TaskStatus.cancelled => '已取消',
+      TaskStatus.overdue => '已逾期',
+    };
   }
 
   void _aiStub() {
@@ -228,7 +274,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                     child: Center(
                       child: _TaskTypeToggle(
                         current: t.type,
-                        onChanged: (nt) => _switchTaskType(repo, t, nt),
+                        onChanged: (nt) => unawaited(_switchTaskType(repo, t, nt)),
                       ),
                     ),
                   ),
@@ -257,7 +303,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                   _TagEditor(
                     allTags: repo.tags,
                     selectedIds: t.tagIds,
-                    onChanged: (ids) => repo.updateTask(t.copyWith(tagIds: ids)),
+                    onChanged: (ids) => unawaited(repo.updateTask(t.copyWith(tagIds: ids))),
                   )
                 else
                   Wrap(
@@ -299,8 +345,16 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                   if (_editing)
                     TextButton.icon(
                       onPressed: () {
-                        repo.addSubtask(t.id, '新子任务');
-                        setState(() {});
+                        final ctx = context;
+                        unawaited(() async {
+                          try {
+                            await repo.addSubtask(t.id, '新子任务');
+                            if (mounted) setState(() {});
+                          } catch (e) {
+                            if (!mounted || !ctx.mounted) return;
+                            await showAppErrorDialog(ctx, title: '添加失败', error: e);
+                          }
+                        }());
                       },
                       icon: const Icon(Icons.add),
                       label: const Text('添加子任务'),
@@ -308,7 +362,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                 ],
                 const SizedBox(height: 8),
                 Text(
-                  '状态：${t.status.name} · 专注累计 ${t.focusTotalSeconds ~/ 3600}h${(t.focusTotalSeconds % 3600) ~/ 60}m',
+                  '状态：${_statusLabelCn(t.status)} · 专注累计 ${t.focusTotalSeconds ~/ 3600}h${(t.focusTotalSeconds % 3600) ~/ 60}m',
                   style: const TextStyle(fontSize: 13, color: AppColors.onSurfaceVariant),
                 ),
               ],
@@ -371,10 +425,15 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
   }
 
   List<Widget> _typeFields(BuildContext context, Task t, DateFormat df) {
-    Future<void> update(Task next) {
-      ref.read(taskRepositoryProvider).updateTask(next);
-      setState(() {});
-      return Future.value();
+    final fieldContext = context;
+    Future<void> update(Task next) async {
+      try {
+        await ref.read(taskRepositoryProvider).updateTask(next);
+        if (mounted) setState(() {});
+      } catch (e) {
+        if (!mounted || !fieldContext.mounted) return;
+        await showAppErrorDialog(fieldContext, title: '更新失败', error: e);
+      }
     }
 
     return [
@@ -612,6 +671,7 @@ class _SubtaskEditRow extends StatefulWidget {
 
 class _SubtaskEditRowState extends State<_SubtaskEditRow> {
   late final TextEditingController _c;
+  Timer? _titleDebounce;
 
   @override
   void initState() {
@@ -621,6 +681,7 @@ class _SubtaskEditRowState extends State<_SubtaskEditRow> {
 
   @override
   void dispose() {
+    _titleDebounce?.cancel();
     _c.dispose();
     super.dispose();
   }
@@ -635,8 +696,12 @@ class _SubtaskEditRowState extends State<_SubtaskEditRow> {
             value: widget.subtask.done,
             onChanged: (v) {
               if (v != null) {
-                widget.repo.toggleSubtask(widget.taskId, widget.subtask.id, v);
-                widget.onChanged();
+                unawaited(() async {
+                  try {
+                    await widget.repo.toggleSubtask(widget.taskId, widget.subtask.id, v);
+                    if (mounted) widget.onChanged();
+                  } catch (_) {}
+                }());
               }
             },
           ),
@@ -644,14 +709,28 @@ class _SubtaskEditRowState extends State<_SubtaskEditRow> {
             child: TextField(
               controller: _c,
               decoration: const InputDecoration(isDense: true),
-              onChanged: (v) => widget.repo.updateSubtaskTitle(widget.taskId, widget.subtask.id, v),
+              onChanged: (v) {
+                _titleDebounce?.cancel();
+                _titleDebounce = Timer(const Duration(milliseconds: 500), () {
+                  if (!mounted) return;
+                  unawaited(() async {
+                    try {
+                      await widget.repo.updateSubtaskTitle(widget.taskId, widget.subtask.id, v);
+                    } catch (_) {}
+                  }());
+                });
+              },
             ),
           ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
             onPressed: () {
-              widget.repo.removeSubtask(widget.taskId, widget.subtask.id);
-              widget.onChanged();
+              unawaited(() async {
+                try {
+                  await widget.repo.removeSubtask(widget.taskId, widget.subtask.id);
+                  if (mounted) widget.onChanged();
+                } catch (_) {}
+              }());
             },
           ),
         ],

@@ -63,8 +63,12 @@ class Task {
   final int? completedAtWeekYear;
 
   bool get isOverdue {
+    if (status == TaskStatus.overdue) return true;
     if (status != TaskStatus.active) return false;
     final now = DateTime.now();
+    if (type == TaskType.block && endAt != null) {
+      return endAt!.isBefore(now);
+    }
     if (type == TaskType.ddl && dueAt != null) {
       return dueAt!.isBefore(now);
     }

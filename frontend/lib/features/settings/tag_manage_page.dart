@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/ui/app_error_dialog.dart';
 import '../../data/providers.dart';
 import '../../domain/models/tag.dart';
 import '../../shared/widgets/app_card.dart';
@@ -87,9 +88,15 @@ class TagManagePage extends ConsumerWidget {
           actions: [
             TextButton(onPressed: () => context.pop(), child: const Text('取消')),
             OutlinedButton(
-              onPressed: () {
-                ref.read(taskRepositoryProvider).addTag(name: nameC.text, color: color);
-                context.pop();
+              onPressed: () async {
+                try {
+                  await ref.read(taskRepositoryProvider).addTag(name: nameC.text, color: color);
+                  if (context.mounted) context.pop();
+                } catch (e) {
+                  if (context.mounted) {
+                    await showAppErrorDialog(context, title: '添加失败', error: e);
+                  }
+                }
               },
               child: const Text('保存'),
             ),
@@ -114,9 +121,15 @@ class TagManagePage extends ConsumerWidget {
           actions: [
             TextButton(onPressed: () => context.pop(), child: const Text('取消')),
             OutlinedButton(
-              onPressed: () {
-                ref.read(taskRepositoryProvider).renameTag(tag.id, c.text);
-                context.pop();
+              onPressed: () async {
+                try {
+                  await ref.read(taskRepositoryProvider).renameTag(tag.id, c.text);
+                  if (context.mounted) context.pop();
+                } catch (e) {
+                  if (context.mounted) {
+                    await showAppErrorDialog(context, title: '保存失败', error: e);
+                  }
+                }
               },
               child: const Text('保存'),
             ),
@@ -140,9 +153,15 @@ class TagManagePage extends ConsumerWidget {
           actions: [
             TextButton(onPressed: () => context.pop(), child: const Text('取消')),
             OutlinedButton(
-              onPressed: () {
-                ref.read(taskRepositoryProvider).recolorTag(tag.id, color);
-                context.pop();
+              onPressed: () async {
+                try {
+                  await ref.read(taskRepositoryProvider).recolorTag(tag.id, color);
+                  if (context.mounted) context.pop();
+                } catch (e) {
+                  if (context.mounted) {
+                    await showAppErrorDialog(context, title: '保存失败', error: e);
+                  }
+                }
               },
               child: const Text('保存'),
             ),
@@ -162,9 +181,15 @@ class TagManagePage extends ConsumerWidget {
           actions: [
             TextButton(onPressed: () => context.pop(), child: const Text('取消')),
             OutlinedButton(
-              onPressed: () {
-                ref.read(taskRepositoryProvider).deleteTag(tag.id);
-                context.pop();
+              onPressed: () async {
+                try {
+                  await ref.read(taskRepositoryProvider).deleteTag(tag.id);
+                  if (context.mounted) context.pop();
+                } catch (e) {
+                  if (context.mounted) {
+                    await showAppErrorDialog(context, title: '删除失败', error: e);
+                  }
+                }
               },
               style: OutlinedButton.styleFrom(foregroundColor: AppColors.error),
               child: const Text('删除'),

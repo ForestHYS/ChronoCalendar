@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,6 +7,7 @@ import 'package:intl/intl.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
+import '../../core/ui/app_error_dialog.dart';
 import '../../data/providers.dart';
 import '../../data/task_repository.dart';
 import '../../domain/models/tag.dart';
@@ -98,7 +101,16 @@ class HomePage extends ConsumerWidget {
                   repo.touchTask(t.id);
                       context.push('/pomodoro/${t.id}');
                 },
-                onDismissedComplete: () => repo.completeTask(t.id),
+                onDismissedComplete: () {
+                  unawaited(() async {
+                    try {
+                      await repo.completeTask(t.id);
+                    } catch (e) {
+                      if (!context.mounted) return;
+                      await showAppErrorDialog(context, title: '无法标记完成', error: e);
+                    }
+                  }());
+                },
               );
             }),
           const SizedBox(height: 20),
@@ -441,7 +453,15 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
                     CheckboxListTile(
                       value: s.done,
                       onChanged: (v) {
-                        if (v != null) widget.repo.toggleSubtask(t.id, s.id, v);
+                        if (v == null) return;
+                        unawaited(() async {
+                          try {
+                            await widget.repo.toggleSubtask(t.id, s.id, v);
+                          } catch (e) {
+                            if (!context.mounted) return;
+                            await showAppErrorDialog(context, title: '更新失败', error: e);
+                          }
+                        }());
                       },
                       title: Text(s.title, style: const TextStyle(fontSize: 13.5, height: 1.25)),
                       controlAffinity: ListTileControlAffinity.leading,
@@ -492,7 +512,16 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
                   if (allDone) ...[
                     const SizedBox(width: 8),
                     OutlinedButton(
-                      onPressed: () => widget.repo.completeTask(t.id),
+                      onPressed: () {
+                        unawaited(() async {
+                          try {
+                            await widget.repo.completeTask(t.id);
+                          } catch (e) {
+                            if (!context.mounted) return;
+                            await showAppErrorDialog(context, title: '无法完成', error: e);
+                          }
+                        }());
+                      },
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.success,
                         side: const BorderSide(color: AppColors.success, width: 1),

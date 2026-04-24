@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/ui/app_error_dialog.dart';
 import '../../data/providers.dart';
 import '../../shared/widgets/app_card.dart';
 
@@ -118,6 +119,8 @@ class SettingsPage extends ConsumerWidget {
               title: const Text('退出登录'),
               onTap: () async {
                 await ref.read(authNotifierProvider).logout();
+                if (!context.mounted) return;
+                context.go('/login');
               },
             ),
           ),
@@ -129,11 +132,10 @@ class SettingsPage extends ConsumerWidget {
   static Future<void> _showEditNickname(BuildContext context, WidgetRef ref) async {
     final repo = ref.read(authRepositoryProvider);
     final c = TextEditingController(text: repo.nickname);
-    final messenger = ScaffoldMessenger.of(context);
     final nav = Navigator.of(context);
     await showDialog<void>(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         return AlertDialog(
           title: const Text('修改昵称'),
           content: TextField(
@@ -142,14 +144,15 @@ class SettingsPage extends ConsumerWidget {
             decoration: const InputDecoration(labelText: '昵称'),
           ),
           actions: [
-            TextButton(onPressed: () => context.pop(), child: const Text('取消')),
+            TextButton(onPressed: () => dialogContext.pop(), child: const Text('取消')),
             OutlinedButton(
               onPressed: () async {
                 try {
                   await ref.read(authRepositoryProvider).updateNickname(c.text);
                   nav.pop();
                 } catch (e) {
-                  messenger.showSnackBar(SnackBar(content: Text('$e')));
+                  if (!context.mounted) return;
+                  await showAppErrorDialog(context, title: '保存失败', error: e);
                 }
               },
               child: const Text('保存'),
@@ -167,7 +170,7 @@ class SettingsPage extends ConsumerWidget {
     final nav = Navigator.of(context);
     await showDialog<void>(
       context: context,
-      builder: (context) {
+      builder: (dialogContext) {
         return AlertDialog(
           title: const Text('修改密码'),
           content: Column(
@@ -187,7 +190,7 @@ class SettingsPage extends ConsumerWidget {
             ],
           ),
           actions: [
-            TextButton(onPressed: () => context.pop(), child: const Text('取消')),
+            TextButton(onPressed: () => dialogContext.pop(), child: const Text('取消')),
             OutlinedButton(
               onPressed: () async {
                 try {
@@ -198,7 +201,8 @@ class SettingsPage extends ConsumerWidget {
                   nav.pop();
                   messenger.showSnackBar(const SnackBar(content: Text('密码已更新')));
                 } catch (e) {
-                  messenger.showSnackBar(SnackBar(content: Text('$e')));
+                  if (!context.mounted) return;
+                  await showAppErrorDialog(context, title: '修改失败', error: e);
                 }
               },
               child: const Text('保存'),

@@ -149,6 +149,8 @@ class TaskSerializer(serializers.Serializer):
             "status": instance.effective_status,
             "remind_at": instance.remind_at,
             "focus_total_seconds": instance.focus_total_seconds,
+            "last_activity_at": instance.last_activity_at,
+            "completed_at": instance.completed_at,
             "created_at": instance.created_at,
             "updated_at": instance.updated_at,
         }

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../data/providers.dart';
 import '../../features/auth/login_page.dart';
+import '../../features/auth/register_page.dart';
 import '../../features/calendar/calendar_page.dart';
 import '../../features/home/home_page.dart';
 import '../../features/pomodoro/pomodoro_page.dart';
@@ -17,6 +18,8 @@ import '../../features/task_list/task_list_page.dart';
 final _rootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'root');
 
 final goRouterProvider = Provider<GoRouter>((ref) {
+  // 监听登录态，logout/login 后重建 GoRouter，确保 redirect 与 shell 栈一致
+  ref.watch(authNotifierProvider);
   final auth = ref.read(authNotifierProvider);
 
   return GoRouter(
@@ -26,15 +29,19 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final loggedIn = auth.isLoggedIn;
       final loc = state.matchedLocation;
-      final loggingIn = loc == '/login';
-      if (!loggedIn && !loggingIn) return '/login';
-      if (loggedIn && loggingIn) return '/home';
+      final onPublicAuth = loc == '/login' || loc == '/register';
+      if (!loggedIn && !onPublicAuth) return '/login';
+      if (loggedIn && onPublicAuth) return '/home';
       return null;
     },
     routes: [
       GoRoute(
         path: '/login',
         builder: (context, state) => const LoginPage(),
+      ),
+      GoRoute(
+        path: '/register',
+        builder: (context, state) => const RegisterPage(),
       ),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {
