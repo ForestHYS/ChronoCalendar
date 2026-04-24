@@ -87,6 +87,8 @@ class AuthNotifier extends ChangeNotifier {
 final authNotifierProvider = ChangeNotifierProvider<AuthNotifier>((ref) {
   return AuthNotifier(
     ref.watch(authRepositoryProvider),
-    ref.watch(taskRepositoryProvider),
+    // 必须用 read：若 watch TaskRepository，clearLocalCache() 会 notifyListeners，
+    // Riverpod 会 dispose 本 AuthNotifier，异步 logout 末尾再 notifyListeners 会崩溃。
+    ref.read(taskRepositoryProvider),
   );
 });

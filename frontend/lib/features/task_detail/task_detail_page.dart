@@ -268,7 +268,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
-                if (_editing)
+                if (_editing && widget.taskId == null)
                   Padding(
                     padding: const EdgeInsets.only(bottom: 14),
                     child: Center(

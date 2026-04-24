@@ -47,6 +47,13 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
     unawaited(_player.setReleaseMode(ReleaseMode.loop));
     unawaited(_player.setVolume(0.65));
     unawaited(_applyWakeLock());
+    final id = widget.taskId;
+    if (id != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await ref.read(taskRepositoryProvider).ensureTaskLoaded(id);
+        if (mounted) setState(() {});
+      });
+    }
   }
 
   @override
@@ -222,6 +229,10 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
     final phaseLabel = _phase == _Phase.focus ? '专注' : '休息';
     final phaseColor = _phase == _Phase.focus ? AppColors.primary : AppColors.success;
     final ring = math.min(MediaQuery.sizeOf(context).width - 40, 300.0);
+    final taskId = widget.taskId;
+    final taskTitle = taskId == null
+        ? null
+        : ref.watch(taskRepositoryProvider).taskById(taskId)?.title;
 
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -231,15 +242,21 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (widget.taskId != null)
+              if (taskId != null) ...[
                 Text(
-                  '任务 ${widget.taskId}',
-                  maxLines: 1,
+                  taskTitle?.trim().isNotEmpty == true ? taskTitle! : '加载中…',
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 13, color: AppColors.onSurfaceVariant),
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.onSurface,
+                    height: 1.25,
+                  ),
                 ),
-              if (widget.taskId != null) const SizedBox(height: 6),
+                const SizedBox(height: 6),
+              ],
               Text(
                 phaseLabel,
                 textAlign: TextAlign.center,
