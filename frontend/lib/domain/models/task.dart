@@ -75,6 +75,7 @@ class Task {
   }
 
   Task copyWith({
+    TaskType? type,
     String? title,
     String? description,
     List<String>? tagIds,
@@ -92,10 +93,11 @@ class Task {
     bool clearRemindAt = false,
     bool clearStartAt = false,
     bool clearEndAt = false,
+    bool clearExpectedMinutes = false,
   }) {
     return Task(
       id: id,
-      type: type,
+      type: type ?? this.type,
       title: title ?? this.title,
       description: description ?? this.description,
       tagIds: tagIds ?? this.tagIds,
@@ -103,7 +105,7 @@ class Task {
       startAt: clearStartAt ? null : (startAt ?? this.startAt),
       endAt: clearEndAt ? null : (endAt ?? this.endAt),
       dueAt: clearDueAt ? null : (dueAt ?? this.dueAt),
-      expectedMinutes: expectedMinutes ?? this.expectedMinutes,
+      expectedMinutes: clearExpectedMinutes ? null : (expectedMinutes ?? this.expectedMinutes),
       remindAt: clearRemindAt ? null : (remindAt ?? this.remindAt),
       focusTotalSeconds: focusTotalSeconds ?? this.focusTotalSeconds,
       subtasks: subtasks ?? this.subtasks,

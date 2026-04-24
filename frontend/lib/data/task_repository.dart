@@ -200,6 +200,44 @@ class TaskRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 新建草稿任务，返回 id 供详情/编辑页复用同一套 UI。
+  String createDraftTask(TaskType type) {
+    final id = 't_${DateTime.now().microsecondsSinceEpoch}';
+    final now = DateTime.now();
+    DateTime? startAt;
+    DateTime? endAt;
+    DateTime? dueAt;
+    const subs = <Subtask>[];
+    switch (type) {
+      case TaskType.block:
+        startAt = now;
+        endAt = now.add(const Duration(hours: 1));
+        break;
+      case TaskType.ddl:
+        dueAt = now.add(const Duration(days: 1));
+        break;
+      case TaskType.todo:
+        dueAt = now.add(const Duration(days: 1));
+        break;
+    }
+    final task = Task(
+      id: id,
+      type: type,
+      title: '新任务',
+      description: '',
+      tagIds: const [],
+      status: TaskStatus.active,
+      lastActivityAt: now,
+      startAt: startAt,
+      endAt: endAt,
+      dueAt: dueAt,
+      subtasks: subs,
+    );
+    _tasks = [..._tasks, task];
+    notifyListeners();
+    return id;
+  }
+
   void toggleSubtask(String taskId, String subtaskId, bool done) {
     final i = _tasks.indexWhere((t) => t.id == taskId);
     if (i < 0) return;

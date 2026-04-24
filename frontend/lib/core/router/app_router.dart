@@ -11,7 +11,6 @@ import '../../features/settings/settings_page.dart';
 import '../../features/settings/pomodoro_settings_page.dart';
 import '../../features/settings/tag_manage_page.dart';
 import '../../features/shell/main_shell.dart';
-import '../../features/task_create/task_create_page.dart';
 import '../../features/task_detail/task_detail_page.dart';
 import '../../features/task_list/task_list_page.dart';
 
@@ -83,7 +82,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/task/new',
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) => const TaskCreatePage(),
+        builder: (context, state) => const TaskDetailPage(taskId: null),
       ),
       GoRoute(
         path: '/task/:id',

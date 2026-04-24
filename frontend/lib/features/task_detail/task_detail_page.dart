@@ -10,9 +10,10 @@ import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 
 class TaskDetailPage extends ConsumerStatefulWidget {
-  const TaskDetailPage({super.key, required this.taskId});
+  /// [taskId] 为 `null` 时表示新建：首帧后以 **固定时段（block）** 插入草稿并进入编辑态。
+  const TaskDetailPage({super.key, this.taskId});
 
-  final String taskId;
+  final String? taskId;
 
   @override
   ConsumerState<TaskDetailPage> createState() => _TaskDetailPageState();
@@ -23,6 +24,28 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
   late final TextEditingController _titleC = TextEditingController();
   late final TextEditingController _descC = TextEditingController();
   late final TextEditingController _expectedC = TextEditingController();
+  /// 新建任务：首帧后创建 block 草稿；已有任务：路由传入 id。
+  String? _tid;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.taskId != null) {
+      _tid = widget.taskId;
+    } else {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final id = ref.read(taskRepositoryProvider).createDraftTask(TaskType.block);
+        if (!mounted) return;
+        setState(() {
+          _tid = id;
+          _editing = true;
+        });
+        final t0 = ref.read(taskRepositoryProvider).taskById(id)!;
+        _fillControllers(t0);
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -36,6 +59,46 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     _titleC.text = t.title;
     _descC.text = t.description;
     _expectedC.text = t.expectedMinutes?.toString() ?? '';
+  }
+
+  void _switchTaskType(TaskRepository repo, Task t, TaskType nextType) {
+    if (t.type == nextType) return;
+    final now = DateTime.now();
+    Task n;
+    switch (nextType) {
+      case TaskType.block:
+        n = t.copyWith(
+          type: TaskType.block,
+          clearDueAt: true,
+          clearExpectedMinutes: true,
+          subtasks: const [],
+          startAt: t.startAt ?? now,
+          endAt: t.endAt ?? now.add(const Duration(hours: 1)),
+        );
+        break;
+      case TaskType.ddl:
+        n = t.copyWith(
+          type: TaskType.ddl,
+          clearStartAt: true,
+          clearEndAt: true,
+          clearExpectedMinutes: true,
+          subtasks: const [],
+          dueAt: t.dueAt ?? t.endAt ?? now.add(const Duration(days: 1)),
+        );
+        break;
+      case TaskType.todo:
+        n = t.copyWith(
+          type: TaskType.todo,
+          clearStartAt: true,
+          clearEndAt: true,
+          dueAt: t.dueAt ?? t.endAt ?? t.startAt ?? now.add(const Duration(days: 1)),
+          subtasks: t.type == TaskType.todo ? t.subtasks : const [],
+        );
+        break;
+    }
+    repo.updateTask(n.copyWith(lastActivityAt: DateTime.now()));
+    _fillControllers(repo.taskById(t.id)!);
+    setState(() {});
   }
 
   Future<DateTime?> _pickDateTime(DateTime? initial) async {
@@ -88,8 +151,8 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
         ],
       ),
     );
-    if (ok == true && mounted) {
-      ref.read(taskRepositoryProvider).deleteTask(widget.taskId);
+    if (ok == true && mounted && _tid != null) {
+      ref.read(taskRepositoryProvider).deleteTask(_tid!);
       context.pop();
     }
   }
@@ -110,7 +173,28 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
   @override
   Widget build(BuildContext context) {
     final repo = ref.watch(taskRepositoryProvider);
-    final t = repo.taskById(widget.taskId);
+
+    if (widget.taskId == null && _tid == null) {
+      return Scaffold(
+        backgroundColor: AppColors.surface,
+        appBar: AppBar(
+          title: const Text('新建任务'),
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => context.pop(),
+          ),
+        ),
+        body: const Center(
+          child: SizedBox(
+            width: 28,
+            height: 28,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
+          ),
+        ),
+      );
+    }
+
+    final t = repo.taskById(_tid!);
     if (t == null) {
       return Scaffold(
         appBar: AppBar(title: const Text('任务')),
@@ -122,7 +206,11 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_editing ? '编辑任务' : t.title),
+        title: Text(
+          widget.taskId == null
+              ? '新建任务'
+              : (_editing ? '编辑任务' : t.title),
+        ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
@@ -134,6 +222,16 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
             child: ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                if (_editing)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 14),
+                    child: Center(
+                      child: _TaskTypeToggle(
+                        current: t.type,
+                        onChanged: (nt) => _switchTaskType(repo, t, nt),
+                      ),
+                    ),
+                  ),
                 _typeLabel(t.type),
                 const SizedBox(height: 12),
                 if (_editing)
@@ -229,7 +327,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                       child: OutlinedButton(
                         onPressed: () async {
                           if (_editing) {
-                            await _save(repo.taskById(widget.taskId)!);
+                            await _save(repo.taskById(t.id)!);
                           } else {
                             _fillControllers(t);
                             setState(() => _editing = true);
@@ -350,6 +448,109 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
             if (onClear != null) TextButton(onPressed: onClear, child: const Text('清除')),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// 紧凑、非全宽的「任务类型」切换（替代 SegmentedButton 铺满行）。
+class _TaskTypeToggle extends StatelessWidget {
+  const _TaskTypeToggle({
+    required this.current,
+    required this.onChanged,
+  });
+
+  final TaskType current;
+  final ValueChanged<TaskType> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.82),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.outline.withValues(alpha: 0.75)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 12,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _TaskTypeChip(
+              label: '时段',
+              icon: Icons.schedule_rounded,
+              selected: current == TaskType.block,
+              onTap: () => onChanged(TaskType.block),
+            ),
+            const SizedBox(width: 4),
+            _TaskTypeChip(
+              label: '截止',
+              icon: Icons.flag_outlined,
+              selected: current == TaskType.ddl,
+              onTap: () => onChanged(TaskType.ddl),
+            ),
+            const SizedBox(width: 4),
+            _TaskTypeChip(
+              label: '待办',
+              icon: Icons.checklist_rounded,
+              selected: current == TaskType.todo,
+              onTap: () => onChanged(TaskType.todo),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TaskTypeChip extends StatelessWidget {
+  const _TaskTypeChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = const Color(0xFF1E40AF);
+    final fg = selected ? accent : AppColors.onSurfaceVariant;
+    return Material(
+      color: selected ? AppColors.primaryContainer.withValues(alpha: 0.95) : Colors.transparent,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: fg),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                  color: fg,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
