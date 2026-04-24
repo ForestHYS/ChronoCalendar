@@ -96,9 +96,7 @@ class HomePage extends ConsumerWidget {
                 },
                 onFocus: () {
                   repo.touchTask(t.id);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('番茄钟页面开发中')),
-                  );
+                      context.push('/pomodoro/${t.id}');
                 },
                 onDismissedComplete: () => repo.completeTask(t.id),
               );
@@ -477,9 +475,7 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
                   OutlinedButton(
                     onPressed: () {
                       widget.repo.touchTask(t.id);
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('番茄钟页面开发中')),
-                      );
+                      context.push('/pomodoro/${t.id}');
                     },
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.primary,

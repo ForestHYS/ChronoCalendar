@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'auth_repository.dart';
+import 'pomodoro_settings_repository.dart';
 import 'task_repository.dart';
 
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
@@ -11,6 +12,10 @@ final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
   return AuthRepository(ref.watch(sharedPreferencesProvider));
+});
+
+final pomodoroSettingsRepositoryProvider = Provider<PomodoroSettingsRepository>((ref) {
+  return PomodoroSettingsRepository(ref.watch(sharedPreferencesProvider));
 });
 
 class AuthNotifier extends ChangeNotifier {

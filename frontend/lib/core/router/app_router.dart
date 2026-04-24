@@ -6,7 +6,9 @@ import '../../data/providers.dart';
 import '../../features/auth/login_page.dart';
 import '../../features/calendar/calendar_page.dart';
 import '../../features/home/home_page.dart';
+import '../../features/pomodoro/pomodoro_page.dart';
 import '../../features/settings/settings_page.dart';
+import '../../features/settings/pomodoro_settings_page.dart';
 import '../../features/settings/tag_manage_page.dart';
 import '../../features/shell/main_shell.dart';
 import '../../features/task_create/task_create_page.dart';
@@ -95,6 +97,21 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/tags',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const TagManagePage(),
+      ),
+      GoRoute(
+        path: '/settings/pomodoro',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const PomodoroSettingsPage(),
+      ),
+      GoRoute(
+        path: '/pomodoro',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const PomodoroPage(),
+      ),
+      GoRoute(
+        path: '/pomodoro/:taskId',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => PomodoroPage(taskId: state.pathParameters['taskId']),
       ),
     ],
   );

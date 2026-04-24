@@ -95,6 +95,13 @@ class SettingsPage extends ConsumerWidget {
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => context.push('/settings/tags'),
                 ),
+                const Divider(height: 1, color: AppColors.outline),
+                ListTile(
+                  leading: const Icon(Icons.timer_outlined),
+                  title: const Text('番茄钟设置'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push('/settings/pomodoro'),
+                ),
               ],
             ),
           ),
