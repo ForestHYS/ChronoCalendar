@@ -4,18 +4,22 @@ import 'package:go_router/go_router.dart';
 
 import '../../data/providers.dart';
 import '../../features/auth/login_page.dart';
+import '../../features/auth/register_page.dart';
 import '../../features/calendar/calendar_page.dart';
 import '../../features/home/home_page.dart';
+import '../../features/pomodoro/pomodoro_page.dart';
 import '../../features/settings/settings_page.dart';
+import '../../features/settings/pomodoro_settings_page.dart';
 import '../../features/settings/tag_manage_page.dart';
 import '../../features/shell/main_shell.dart';
-import '../../features/task_create/task_create_page.dart';
 import '../../features/task_detail/task_detail_page.dart';
 import '../../features/task_list/task_list_page.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'root');
 
 final goRouterProvider = Provider<GoRouter>((ref) {
+  // 监听登录态，logout/login 后重建 GoRouter，确保 redirect 与 shell 栈一致
+  ref.watch(authNotifierProvider);
   final auth = ref.read(authNotifierProvider);
 
   return GoRouter(
@@ -25,15 +29,19 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final loggedIn = auth.isLoggedIn;
       final loc = state.matchedLocation;
-      final loggingIn = loc == '/login';
-      if (!loggedIn && !loggingIn) return '/login';
-      if (loggedIn && loggingIn) return '/home';
+      final onPublicAuth = loc == '/login' || loc == '/register';
+      if (!loggedIn && !onPublicAuth) return '/login';
+      if (loggedIn && onPublicAuth) return '/home';
       return null;
     },
     routes: [
       GoRoute(
         path: '/login',
         builder: (context, state) => const LoginPage(),
+      ),
+      GoRoute(
+        path: '/register',
+        builder: (context, state) => const RegisterPage(),
       ),
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) {
@@ -81,7 +89,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/task/new',
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) => const TaskCreatePage(),
+        builder: (context, state) => const TaskDetailPage(taskId: null),
       ),
       GoRoute(
         path: '/task/:id',
@@ -95,6 +103,21 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/tags',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const TagManagePage(),
+      ),
+      GoRoute(
+        path: '/settings/pomodoro',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const PomodoroSettingsPage(),
+      ),
+      GoRoute(
+        path: '/pomodoro',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const PomodoroPage(),
+      ),
+      GoRoute(
+        path: '/pomodoro/:taskId',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => PomodoroPage(taskId: state.pathParameters['taskId']),
       ),
     ],
   );

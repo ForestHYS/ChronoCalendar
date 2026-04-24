@@ -7,17 +7,19 @@ import '../../core/theme/app_text_styles.dart';
 import '../../core/ui/app_error_dialog.dart';
 import '../../data/providers.dart';
 
-class LoginPage extends ConsumerStatefulWidget {
-  const LoginPage({super.key});
+class RegisterPage extends ConsumerStatefulWidget {
+  const RegisterPage({super.key});
 
   @override
-  ConsumerState<LoginPage> createState() => _LoginPageState();
+  ConsumerState<RegisterPage> createState() => _RegisterPageState();
 }
 
-class _LoginPageState extends ConsumerState<LoginPage> {
+class _RegisterPageState extends ConsumerState<RegisterPage> {
   final _formKey = GlobalKey<FormState>();
   final _email = TextEditingController();
+  final _name = TextEditingController();
   final _password = TextEditingController();
+  final _password2 = TextEditingController();
   bool _loading = false;
 
   static final _emailRe = RegExp(r'^[\w-.]+@([\w-]+\.)+[\w-]{2,}$');
@@ -25,7 +27,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   @override
   void dispose() {
     _email.dispose();
+    _name.dispose();
     _password.dispose();
+    _password2.dispose();
     super.dispose();
   }
 
@@ -33,10 +37,14 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _loading = true);
     try {
-      await ref.read(authNotifierProvider).login(_email.text.trim(), _password.text);
+      await ref.read(authNotifierProvider).register(
+            email: _email.text.trim(),
+            password: _password.text,
+            name: _name.text.trim().isEmpty ? null : _name.text.trim(),
+          );
       if (mounted) context.go('/home');
     } catch (e) {
-      if (mounted) await showAppErrorDialog(context, title: '登录失败', error: e);
+      if (mounted) await showAppErrorDialog(context, title: '注册失败', error: e);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -58,20 +66,20 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     const Text(
-                      '日程',
+                      '创建账号',
                       textAlign: TextAlign.center,
                       style: AppTextStyles.appBarTitle,
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      '登录以继续',
+                      '注册后即可同步日程与任务',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 14,
                         color: AppColors.onSurfaceVariant,
                       ),
                     ),
-                    const SizedBox(height: 40),
+                    const SizedBox(height: 36),
                     TextFormField(
                       controller: _email,
                       keyboardType: TextInputType.emailAddress,
@@ -89,14 +97,39 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     ),
                     const SizedBox(height: 16),
                     TextFormField(
+                      controller: _name,
+                      textCapitalization: TextCapitalization.words,
+                      decoration: const InputDecoration(
+                        labelText: '昵称（可选）',
+                        hintText: '用于展示的名称',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
                       controller: _password,
                       obscureText: true,
-                      autofillHints: const [AutofillHints.password],
+                      autofillHints: const [AutofillHints.newPassword],
                       decoration: const InputDecoration(
                         labelText: '密码',
+                        hintText: '至少 6 位',
                       ),
                       validator: (v) {
                         if (v == null || v.isEmpty) return '请输入密码';
+                        if (v.length < 6) return '密码至少 6 位';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _password2,
+                      obscureText: true,
+                      autofillHints: const [AutofillHints.newPassword],
+                      decoration: const InputDecoration(
+                        labelText: '确认密码',
+                      ),
+                      validator: (v) {
+                        if (v == null || v.isEmpty) return '请再次输入密码';
+                        if (v != _password.text) return '两次密码不一致';
                         return null;
                       },
                     ),
@@ -112,12 +145,12 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                                 color: AppColors.onPrimary,
                               ),
                             )
-                          : const Text('登录'),
+                          : const Text('注册'),
                     ),
                     const SizedBox(height: 12),
                     TextButton(
-                      onPressed: _loading ? null : () => context.push('/register'),
-                      child: const Text('没有账号？去注册'),
+                      onPressed: _loading ? null : () => context.go('/login'),
+                      child: const Text('已有账号？去登录'),
                     ),
                   ],
                 ),

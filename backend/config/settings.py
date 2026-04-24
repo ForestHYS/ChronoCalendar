@@ -28,6 +28,7 @@ INSTALLED_APPS = [
     "django.contrib.auth",
     "django.contrib.contenttypes",
     # 第三方
+    "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
     # 本项目
@@ -37,6 +38,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
 ]
 
@@ -102,3 +104,8 @@ TIME_ZONE = "UTC"
 LANGUAGE_CODE = "zh-hans"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# ------------------------------------------------------------------ #
+# CORS（Flutter Web / 浏览器跨域；需安装 django-cors-headers）
+# ------------------------------------------------------------------ #
+CORS_ALLOW_ALL_ORIGINS = True  # 开发用；生产请改为 CORS_ALLOWED_ORIGINS 白名单

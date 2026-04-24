@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# Django / 本地数据
+db.sqlite3
+*.sqlite3-journal
+staticfiles/
+media/
+
+# 环境变量与密钥（勿提交）
+.env
+.env.*
+!.env.example
+
+# 打包与元数据
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# 测试与类型检查
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# 日志
+*.log
+
+# IDE / 系统
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
