@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/api/api_client.dart';
 import 'auth_repository.dart';
+import 'agent_repository.dart';
 import 'pomodoro_settings_repository.dart';
 import 'task_repository.dart';
 
@@ -25,6 +26,10 @@ final pomodoroSettingsRepositoryProvider = Provider<PomodoroSettingsRepository>(
 
 final taskRepositoryProvider = ChangeNotifierProvider<TaskRepository>((ref) {
   return TaskRepository(ref.watch(apiClientProvider));
+});
+
+final agentRepositoryProvider = Provider<AgentRepository>((ref) {
+  return AgentRepository(ref.watch(apiClientProvider));
 });
 
 class AuthNotifier extends ChangeNotifier {

@@ -34,6 +34,7 @@ INSTALLED_APPS = [
     # 本项目
     "accounts",
     "tasks",
+    "agent",
 ]
 
 MIDDLEWARE = [
@@ -109,3 +110,12 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # CORS（Flutter Web / 浏览器跨域；需安装 django-cors-headers）
 # ------------------------------------------------------------------ #
 CORS_ALLOW_ALL_ORIGINS = True  # 开发用；生产请改为 CORS_ALLOWED_ORIGINS 白名单
+
+# ------------------------------------------------------------------ #
+# Agent / LLM（由代码读取，不从环境变量读取）
+# ------------------------------------------------------------------ #
+# 注意：请勿将真实 key 提交到 git。推荐在本机用一个不入库的私有文件覆盖本变量，
+# 或者使用你的部署系统注入 settings（但 agent/llm.py 不会直接读取环境变量）。
+AGENT_LLM_BASE_URL = "https://jeniya.top/v1"
+AGENT_LLM_API_KEY = "sk-2rkBuEmwGcu0WJ7fLdC7rSGELr1JBYCN38c145waQa7A6G0T"  # 为空表示禁用 LLM（会走规则降级）
+AGENT_LLM_MODEL = "gpt-5"

@@ -28,6 +28,7 @@ views.py
 
 from django.db.models import OuterRef, Q, Subquery, Sum
 from django.shortcuts import get_object_or_404
+from django.utils.dateparse import parse_datetime
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.decorators import action
@@ -132,6 +133,22 @@ class TaskViewSet(ViewSet):
         task_type = p.get("type")
         if task_type in ("block", "ddl", "todo"):
             qs = qs.filter(type=task_type)
+
+        # 时间范围（仅 block）
+        # 用于日历区间查询 / 时间冲突检测等场景
+        start_from_raw = p.get("start_from")
+        start_to_raw = p.get("start_to")
+        if (start_from_raw or start_to_raw) and task_type == "block":
+            if start_from_raw:
+                start_from = parse_datetime(start_from_raw)
+                if start_from is None:
+                    return err("INVALID_PARAM", "start_from 不是有效的 datetime")
+                qs = qs.filter(block_detail__start_at__gte=start_from)
+            if start_to_raw:
+                start_to = parse_datetime(start_to_raw)
+                if start_to is None:
+                    return err("INVALID_PARAM", "start_to 不是有效的 datetime")
+                qs = qs.filter(block_detail__start_at__lte=start_to)
 
         # 关键词搜索（标题）
         q = p.get("q", "").strip()

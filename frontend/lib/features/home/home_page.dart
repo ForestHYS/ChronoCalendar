@@ -67,6 +67,13 @@ class HomePage extends ConsumerWidget {
       backgroundColor: AppColors.surface,
       appBar: AppBar(
         title: const Text('主页'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.smart_toy_outlined),
+            tooltip: 'AI 助手',
+            onPressed: () => context.push('/agent'),
+          ),
+        ],
       ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),

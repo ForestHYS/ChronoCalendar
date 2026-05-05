@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../data/providers.dart';
 import '../../features/auth/login_page.dart';
 import '../../features/auth/register_page.dart';
+import '../../features/agent_chat/agent_chat_page.dart';
 import '../../features/calendar/calendar_page.dart';
 import '../../features/home/home_page.dart';
 import '../../features/pomodoro/pomodoro_page.dart';
@@ -89,7 +90,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/task/new',
         parentNavigatorKey: _rootNavigatorKey,
-        builder: (context, state) => const TaskDetailPage(taskId: null),
+        builder: (context, state) => TaskDetailPage(
+          taskId: null,
+          initialExtra: state.extra,
+        ),
       ),
       GoRoute(
         path: '/task/:id',
@@ -118,6 +122,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/pomodoro/:taskId',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => PomodoroPage(taskId: state.pathParameters['taskId']),
+      ),
+      GoRoute(
+        path: '/agent',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const AgentChatPage(),
       ),
     ],
   );

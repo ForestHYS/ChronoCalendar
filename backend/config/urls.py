@@ -10,6 +10,9 @@ urlpatterns = [
     # Auth
     path("api/v1/auth/", include("accounts.urls")),
 
+    # Agent
+    path("api/v1/agent/", include("agent.urls")),
+
     # 任务相关（标签 / 任务 / 子任务）
     path("api/v1/", include("tasks.urls")),
 ]

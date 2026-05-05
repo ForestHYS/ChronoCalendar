@@ -1,6 +1,7 @@
 // TODO: 接入 GET /tasks 筛选排序与侧边类型栏（block / ddl / todo）、顶栏搜索与标签筛选。
 
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
 
@@ -14,6 +15,11 @@ class TaskListPage extends StatelessWidget {
       appBar: AppBar(
         title: const Text('任务列表'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.smart_toy_outlined),
+            onPressed: () => context.push('/agent'),
+            tooltip: 'AI 助手',
+          ),
           IconButton(
             icon: const Icon(Icons.filter_list_outlined),
             onPressed: () {},
