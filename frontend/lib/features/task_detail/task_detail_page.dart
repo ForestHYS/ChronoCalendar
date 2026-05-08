@@ -15,9 +15,10 @@ import '../../domain/models/task_status.dart';
 
 class TaskDetailPage extends ConsumerStatefulWidget {
   /// [taskId] 为 `null` 时表示新建：首帧后以 **固定时段（block）** 插入草稿并进入编辑态。
-  const TaskDetailPage({super.key, this.taskId});
+  const TaskDetailPage({super.key, this.taskId, this.initialExtra});
 
   final String? taskId;
+  final Object? initialExtra;
 
   @override
   ConsumerState<TaskDetailPage> createState() => _TaskDetailPageState();
@@ -59,7 +60,11 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
             _tid = id;
             _editing = true;
           });
-          final t0 = ref.read(taskRepositoryProvider).taskById(id)!;
+          var t0 = ref.read(taskRepositoryProvider).taskById(id)!;
+          final draft = _readAgentDraft(widget.initialExtra);
+          if (draft != null) {
+            t0 = await _applyAgentDraft(t0, draft);
+          }
           _fillControllers(t0);
         } catch (e) {
           if (!mounted) return;
@@ -68,6 +73,46 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
         }
       });
     }
+  }
+
+  Map<String, dynamic>? _readAgentDraft(Object? extra) {
+    if (extra is Map<String, dynamic>) {
+      final d = extra['agent_draft'];
+      if (d is Map<String, dynamic>) return d;
+    }
+    return null;
+  }
+
+  DateTime? _parseIso(String? s) {
+    if (s == null || s.trim().isEmpty) return null;
+    try {
+      return DateTime.parse(s);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<Task> _applyAgentDraft(Task base, Map<String, dynamic> draft) async {
+    final title = (draft['title'] as String?)?.trim();
+    final desc = (draft['description'] as String?)?.trim();
+    final startAt = _parseIso(draft['start_at'] as String?);
+    final endAt = _parseIso(draft['end_at'] as String?);
+    final dueAt = _parseIso(draft['due_at'] as String?);
+    final tagIdsRaw = draft['tag_ids'];
+    final tagIds = (tagIdsRaw is List)
+        ? tagIdsRaw.whereType<String>().toList()
+        : <String>[];
+
+    final next = base.copyWith(
+      title: title?.isNotEmpty == true ? title! : base.title,
+      description: desc ?? base.description,
+      startAt: startAt ?? base.startAt,
+      endAt: endAt ?? base.endAt,
+      dueAt: dueAt ?? base.dueAt,
+      tagIds: tagIds.isNotEmpty ? tagIds : base.tagIds,
+    );
+    await ref.read(taskRepositoryProvider).updateTask(next);
+    return ref.read(taskRepositoryProvider).taskById(next.id) ?? next;
   }
 
   @override
@@ -201,19 +246,6 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
       TaskStatus.cancelled => '已取消',
       TaskStatus.overdue => '已逾期',
     };
-  }
-
-  void _aiStub() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('AI 快捷设置'),
-        content: const Text('语音输入与自动生成字段功能开发中（TODO）。'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了')),
-        ],
-      ),
-    );
   }
 
   @override
@@ -388,13 +420,6 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                           }
                         },
                         child: Text(_editing ? '保存' : '编辑'),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _aiStub,
-                        child: const Text('AI 快捷'),
                       ),
                     ),
                     const SizedBox(width: 8),
