@@ -37,3 +37,34 @@ class AgentMessage(models.Model):
         db_table = "agent_messages"
         ordering = ["created_at"]
 
+
+class ApprovalRequest(models.Model):
+    """高危 Skill（如删除任务）需用户明确批准后执行。"""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+        EXPIRED = "expired", "Expired"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_approvals"
+    )
+    agent_session = models.ForeignKey(
+        AgentSession, on_delete=models.CASCADE, related_name="approvals", null=True, blank=True
+    )
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING, db_index=True
+    )
+    skill_name = models.CharField(max_length=64)
+    args_json = models.JSONField(default=dict)
+    summary = models.CharField(max_length=500, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "agent_approval_requests"
+        ordering = ["-created_at"]
+

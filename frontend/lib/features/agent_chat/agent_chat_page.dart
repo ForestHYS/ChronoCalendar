@@ -97,7 +97,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                     alignment: it.isUser ? Alignment.centerRight : Alignment.centerLeft,
                     child: it.isUser
                         ? _UserBubble(text: it.text!)
-                        : _AssistantCard(payload: it.payload!, onOpenEditor: _openEditorFromDraft),
+                        : _AssistantCard(
+                            payload: it.payload!,
+                            onOpenEditor: _openEditorFromDraft,
+                            onFollowUp: _appendAssistantPayload,
+                          ),
                   ),
                 );
               },
@@ -140,6 +144,13 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   void _openEditorFromDraft(Map<String, dynamic> draft) {
     context.push('/task/new', extra: {'agent_draft': draft});
   }
+
+  void _appendAssistantPayload(Map<String, dynamic> payload) {
+    setState(() {
+      _items.add(_ChatItem.assistant(payload));
+    });
+    _scrollToBottom();
+  }
 }
 
 class _ChatItem {
@@ -174,13 +185,18 @@ class _UserBubble extends StatelessWidget {
   }
 }
 
-class _AssistantCard extends StatelessWidget {
-  const _AssistantCard({required this.payload, required this.onOpenEditor});
+class _AssistantCard extends ConsumerWidget {
+  const _AssistantCard({
+    required this.payload,
+    required this.onOpenEditor,
+    required this.onFollowUp,
+  });
   final Map<String, dynamic> payload;
   final void Function(Map<String, dynamic> draft) onOpenEditor;
+  final void Function(Map<String, dynamic> payload) onFollowUp;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final type = payload['type'];
     if (type == 'open_editor') {
       final draft = (payload['task_draft'] is Map<String, dynamic>)
@@ -228,6 +244,68 @@ class _AssistantCard extends StatelessWidget {
     if (type == 'query') {
       final q = payload['query'];
       return _assistantTextCard('查询请求：${q ?? ''}');
+    }
+
+    if (type == 'approval_required') {
+      final summary = payload['summary'] as String? ?? '需要你的确认';
+      final approvalId = payload['approval_id'] as String?;
+      return ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: Card(
+          color: AppColors.surfaceContainer,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('需要授权', style: TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                Text(summary),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: approvalId == null
+                            ? null
+                            : () async {
+                                try {
+                                  final r = await ref.read(agentRepositoryProvider).rejectApproval(approvalId);
+                                  onFollowUp(r);
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    await showAppErrorDialog(context, title: '操作失败', error: e);
+                                  }
+                                }
+                              },
+                        child: const Text('拒绝'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: approvalId == null
+                            ? null
+                            : () async {
+                                try {
+                                  final r = await ref.read(agentRepositoryProvider).approveApproval(approvalId);
+                                  onFollowUp(r);
+                                } catch (e) {
+                                  if (context.mounted) {
+                                    await showAppErrorDialog(context, title: '操作失败', error: e);
+                                  }
+                                }
+                              },
+                        child: const Text('批准'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
     }
 
     if (type == 'query_result') {
