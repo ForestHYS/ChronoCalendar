@@ -1,22 +1,34 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
 from django.utils import timezone
 
 from langgraph.graph import END, StateGraph
 
-from .llm import call_llm_json, call_llm_text
+from .llm import call_llm_json
+from .registry import get_skill, iter_skills, normalize_args, skills_prompt_lines
+from .models import AgentSession, ApprovalRequest
+from . import tools
 import logging
 
 logger = logging.getLogger(__name__)
 
-ToolName = Literal["search_tasks", "build_task_draft", "check_block_conflict"]
+
+def _terminal_response(resp: Optional[dict]) -> bool:
+    if not resp:
+        return False
+    return resp.get("type") in (
+        "message",
+        "open_editor",
+        "query_result",
+        "approval_required",
+    )
 
 
 class AgentState(TypedDict, total=False):
     user_id: str
+    session_id: str
     input_text: str
     client_context: dict
     scratchpad: list
@@ -27,18 +39,19 @@ class AgentState(TypedDict, total=False):
 def _normalize_input(state: AgentState) -> AgentState:
     text = (state.get("input_text") or "").strip()
     state["input_text"] = text
+    if state.get("scratchpad") is None:
+        state["scratchpad"] = []
     return state
 
 
+def _tool_catalog_prompt() -> str:
+    lines = skills_prompt_lines()
+    return "\n".join(lines)
+
+
 def _decide_next(state: AgentState) -> AgentState:
-    """
-    ReAct：让模型决定下一步：直接回复，或调用 tool。
-    输出严格 JSON：
-      {"action":"respond","text":"..."}
-      {"action":"tool","tool":"search_tasks","args":{...}}
-      {"action":"open_editor","task_draft":{...}}
-    """
-    if isinstance(state.get("response"), dict):
+    """LLM 决策：respond / open_editor / tool。"""
+    if _terminal_response(state.get("response")):
         return state
 
     text = state.get("input_text") or ""
@@ -48,18 +61,21 @@ def _decide_next(state: AgentState) -> AgentState:
     scratchpad = state.get("scratchpad") or []
 
     system = (
-        "你是一个日程/任务 app 的 AI 助手。"
-        "你可以与用户闲聊并正常用中文回复。"
-        "当需要查询数据或做冲突检测/生成草稿时，必须使用工具。"
-        "你必须输出严格 JSON 对象，不要输出任何额外文字。"
-        "可用工具：\n"
-        "1) search_tasks(args): {q, task_type, limit}\n"
-        "2) build_task_draft(args): {task_type,title,description,start_at,end_at,due_at,tag_ids}\n"
-        "3) check_block_conflict(args): {start_at,end_at}\n"
+        "你是一个日程/任务 app 的 AI 助手。\n"
+        "你可以与用户闲聊并正常用中文回复。\n"
+        "当需要查询数据、生成草稿、冲突检测或申请删除任务时，必须使用工具。\n"
+        "你必须输出严格 JSON 对象，不要输出任何额外文字。\n\n"
+        "输出格式之一：\n"
+        '{"action":"respond","text":"..."}\n'
+        '{"action":"open_editor","task_draft":{...}}\n'
+        '{"action":"tool","tool":"<skill_name>","args":{...}}\n\n'
+        "可用工具（Skill）说明：\n"
+        f"{_tool_catalog_prompt()}\n\n"
         "规则：\n"
-        "- 创建/编辑任务不能直接落库，只能返回 open_editor + task_draft。\n"
-        "- 如果用户只是问候/闲聊，直接 respond。\n"
-        "- 如果你已经拿到工具结果（last_tool），请基于它给出最终 respond 或 open_editor。\n"
+        "- 创建/编辑任务不能直接落库；生成草稿请用 build_task_draft，最终返回 open_editor。\n"
+        "- 删除任务必须使用工具 delete_task（只会创建审批请求，不会立即删除）。\n"
+        "- 若用户只是问候/闲聊，用 respond。\n"
+        "- 若已有 last_tool（上一轮工具结果），请基于它给出最终 respond / open_editor / tool。\n"
     )
     user = {
         "now": now,
@@ -76,84 +92,127 @@ def _decide_next(state: AgentState) -> AgentState:
         }
         return state
 
-    state["last_tool"] = None
-    state["scratchpad"] = scratchpad
     state["scratchpad"].append({"llm_decision": r.data})
     state["response"] = {"type": "decision", "decision": r.data}
     return state
 
 
 def _run_tool(state: AgentState) -> AgentState:
+    """处理 decision：respond/open_editor 直接落盘；tool 执行或进入审批。"""
     if not isinstance(state.get("response"), dict):
         return state
     resp = state["response"]
     if resp.get("type") != "decision":
         return state
+
     decision = resp.get("decision")
     if not isinstance(decision, dict):
         state["response"] = {"type": "message", "text": "AI 返回格式异常。"}
         return state
 
     action = decision.get("action")
+    if action == "respond":
+        state["response"] = {"type": "message", "text": decision.get("text") or "收到。"}
+        return state
+    if action == "open_editor":
+        state["response"] = {
+            "type": "open_editor",
+            "task_draft": decision.get("task_draft") if isinstance(decision.get("task_draft"), dict) else {},
+        }
+        return state
     if action != "tool":
+        state["response"] = {"type": "message", "text": "无法处理的指令。"}
         return state
 
-    tool = decision.get("tool")
-    args = decision.get("args") or {}
-    if not isinstance(args, dict):
-        args = {}
+    tool_name = decision.get("tool")
+    raw_args = decision.get("args") or {}
+    if not isinstance(raw_args, dict):
+        raw_args = {}
 
-    from . import tools  # local import
+    skill = get_skill(str(tool_name)) if tool_name else None
+    if not skill:
+        state["response"] = {"type": "message", "text": f"未知工具：{tool_name}"}
+        return state
 
     user_id = state.get("user_id") or ""
-    if tool == "search_tasks":
-        out = tools.search_tasks(
-            user_id=user_id,
-            q=str(args.get("q") or ""),
-            task_type=args.get("task_type"),
-            limit=int(args.get("limit") or 10),
-        )
-    elif tool == "build_task_draft":
-        out = tools.build_task_draft(
-            task_type=str(args.get("task_type") or "block"),
-            title=str(args.get("title") or "新任务"),
-            description=str(args.get("description") or ""),
-            start_at=args.get("start_at"),
-            end_at=args.get("end_at"),
-            due_at=args.get("due_at"),
-            tag_ids=args.get("tag_ids") if isinstance(args.get("tag_ids"), list) else [],
-        )
-    elif tool == "check_block_conflict":
-        out = tools.check_block_conflict(
-            user_id=user_id,
-            start_at=str(args.get("start_at") or ""),
-            end_at=str(args.get("end_at") or ""),
-        )
-    else:
-        out = {"ok": False, "error": "unknown_tool"}
 
-    state["last_tool"] = {"tool": tool, "args": args, "output": out}
-    # 清空 decision，让下一轮再 decide
+    # 需要人工审批：不落库执行，只创建 ApprovalRequest
+    if skill.requires_approval:
+        try:
+            args = normalize_args(skill.name, raw_args)
+        except ValueError as e:
+            state["response"] = {"type": "message", "text": str(e)}
+            return state
+
+        if skill.name == "delete_task":
+            tid = args.get("task_id")
+            summ = tools.task_summary_for_approval(user_id=user_id, task_id=tid)
+            if not summ.get("ok"):
+                state["response"] = {"type": "message", "text": "找不到该任务或无权删除。"}
+                return state
+            task = summ["task"]
+            summary = f"永久删除任务「{task.get('title', '')}」（{task.get('type', '')}）"
+            sid = state.get("session_id")
+            session = None
+            if sid:
+                session = AgentSession.objects.filter(pk=sid, user_id=user_id).first()
+
+            ar = ApprovalRequest.objects.create(
+                user_id=user_id,
+                agent_session=session,
+                skill_name=skill.name,
+                args_json=args,
+                summary=summary[:500],
+            )
+            state["response"] = {
+                "type": "approval_required",
+                "approval_id": str(ar.id),
+                "skill_name": skill.name,
+                "summary": summary,
+                "task_preview": task,
+                "proposed_action": {"skill_name": skill.name, "args": args},
+            }
+            return state
+
+        state["response"] = {"type": "message", "text": "该操作需要审批，但未配置审批流程。"}
+        return state
+
+    # 普通工具执行
+    try:
+        args = normalize_args(skill.name, raw_args)
+    except ValueError as e:
+        state["response"] = {"type": "message", "text": str(e)}
+        return state
+
+    from .registry import run_skill
+
+    try:
+        out = run_skill(skill.name, user_id, raw_args)
+    except Exception as e:
+        logger.exception("run_skill failed")
+        state["response"] = {"type": "message", "text": f"工具执行失败：{e}"}
+        return state
+
+    state["last_tool"] = {"tool": skill.name, "args": args, "output": out}
     state["response"] = {}
     return state
 
 
 def _compose_response(state: AgentState) -> AgentState:
-    if isinstance(state.get("response"), dict):
-        # 如果已经有最终响应，直接返回；否则继续
-        if state["response"].get("type") in ("message", "open_editor", "query_result"):
-            return state
+    if _terminal_response(state.get("response")):
+        return state
 
-    # 让模型基于 last_tool 产出最终回复
     text = state.get("input_text") or ""
     last_tool = state.get("last_tool")
     system = (
-        "你是任务日历 app 的 AI 助手。你可以正常聊天。"
-        "当 last_tool 存在时，请根据工具输出生成最终结果：\n"
-        "- 如果 last_tool.tool == search_tasks：输出 {type:'query_result', items:[...], text:'...'}\n"
-        "- 如果 last_tool.tool == build_task_draft：输出 {type:'open_editor', task_draft:{...}, message?:'...'}\n"
-        "- 如果 last_tool.tool == check_block_conflict：你需要结合用户原始意图输出 {type:'message', text:'...'} 或在允许时输出 open_editor + conflict。\n"
-        "你必须输出严格 JSON 对象。"
+        "你是任务日历 app 的 AI 助手。你可以正常聊天。\n"
+        "当 last_tool 存在时，请根据工具输出生成最终结果（严格 JSON）：\n"
+        "- last_tool.tool == search_tasks：{type:'query_result', items: last_tool.output.items, text:'简短说明'}\n"
+        "- last_tool.tool == build_task_draft：{type:'open_editor', task_draft: last_tool.output, message?:'...'}\n"
+        "- last_tool.tool == check_block_conflict：若有 conflict，输出 type:'open_editor' 并在顶层附带 conflict 字段（与 task_draft 同级）；"
+        "task_draft 须来自用户意图；conflict 取自工具输出的 conflict 字段。\n"
+        "若无 last_tool，输出 {type:'message', text:'...'}。\n"
+        "必须输出严格 JSON 对象。"
     )
     user = {"user_input": text, "last_tool": last_tool}
     r = call_llm_json(system=system, user=str(user))
@@ -162,9 +221,8 @@ def _compose_response(state: AgentState) -> AgentState:
         state["response"] = {"type": "message", "text": "AI 生成回复失败，请稍后再试。"}
         return state
 
-    # 兜底：若 LLM 给出 respond/action，转成 message
     out = r.data
-    if out.get("type") in ("message", "open_editor", "query_result"):
+    if out.get("type") in ("message", "open_editor", "query_result", "approval_required"):
         state["response"] = out
         return state
     if out.get("action") == "respond":
@@ -172,6 +230,12 @@ def _compose_response(state: AgentState) -> AgentState:
         return state
     state["response"] = {"type": "message", "text": "收到。"}
     return state
+
+
+def _route_after_run(state: AgentState) -> str:
+    if _terminal_response(state.get("response")):
+        return "compose"
+    return "decide"
 
 
 def build_graph():
@@ -183,10 +247,11 @@ def build_graph():
 
     g.set_entry_point("NormalizeInput")
     g.add_edge("NormalizeInput", "DecideNext")
-    # Decide -> RunTool -> Decide (最多两轮：先拿工具结果，再生成回复)
     g.add_edge("DecideNext", "RunTool")
-    g.add_edge("RunTool", "DecideNext")
-    g.add_edge("DecideNext", "ComposeResponse")
+    g.add_conditional_edges(
+        "RunTool",
+        _route_after_run,
+        {"compose": "ComposeResponse", "decide": "DecideNext"},
+    )
     g.add_edge("ComposeResponse", END)
     return g.compile()
-

@@ -34,5 +34,34 @@ class AgentRepository {
     }
     throw StateError('发送失败');
   }
+
+  /// 批准高危操作（如删除任务）；返回与消息接口一致的 `response`。
+  Future<Map<String, dynamic>> approveApproval(String approvalId) async {
+    final data = await _api.request(
+      'POST',
+      'agent/approvals/$approvalId/approve/',
+      body: {},
+      auth: true,
+    );
+    if (data is Map<String, dynamic>) {
+      final resp = data['response'];
+      if (resp is Map<String, dynamic>) return resp;
+    }
+    throw StateError('批准失败');
+  }
+
+  Future<Map<String, dynamic>> rejectApproval(String approvalId) async {
+    final data = await _api.request(
+      'POST',
+      'agent/approvals/$approvalId/reject/',
+      body: {},
+      auth: true,
+    );
+    if (data is Map<String, dynamic>) {
+      final resp = data['response'];
+      if (resp is Map<String, dynamic>) return resp;
+    }
+    throw StateError('拒绝失败');
+  }
 }
 

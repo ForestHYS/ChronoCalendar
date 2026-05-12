@@ -9,5 +9,20 @@ urlpatterns = [
         views.AgentMessageCreateView.as_view(),
         name="agent-message-create",
     ),
+    path(
+        "approvals/<uuid:approval_id>/",
+        views.ApprovalDetailView.as_view(),
+        name="agent-approval-detail",
+    ),
+    path(
+        "approvals/<uuid:approval_id>/approve/",
+        views.ApprovalApproveView.as_view(),
+        name="agent-approval-approve",
+    ),
+    path(
+        "approvals/<uuid:approval_id>/reject/",
+        views.ApprovalRejectView.as_view(),
+        name="agent-approval-reject",
+    ),
 ]
 
