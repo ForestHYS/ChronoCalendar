@@ -118,48 +118,62 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
     return Scaffold(
       backgroundColor: AppColors.surface,
       appBar: AppBar(
-        titleSpacing: 12,
-        title: TaskListSearchField(
-          controller: _searchController,
-          onChanged: (v) => setState(() => _searchQuery = v.trim()),
-        ),
+        title: const Text('任务'),
         actions: [
           IconButton(
             icon: const Icon(Icons.smart_toy_outlined),
-            onPressed: () => context.push('/agent'),
             tooltip: 'AI 助手',
+            onPressed: () => context.push('/agent'),
           ),
-          _FilterButton(
-            active: _filter.hasActiveFilters,
-            onPressed: _openFilterSheet,
-          ),
-          const SizedBox(width: 4),
         ],
       ),
-      body: Row(
+      body: Column(
         children: [
-          TaskCategoryRail(
-            selected: _category,
-            onSelected: _onCategoryChanged,
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 4, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TaskListSearchField(
+                    controller: _searchController,
+                    onChanged: (v) => setState(() => _searchQuery = v.trim()),
+                  ),
+                ),
+                _FilterButton(
+                  active: _filter.hasActiveFilters,
+                  onPressed: _openFilterSheet,
+                ),
+              ],
+            ),
           ),
           Expanded(
-            child: tasks.isEmpty
-                ? const _EmptyState()
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 96),
-                    itemCount: tasks.length,
-                    itemBuilder: (context, i) {
-                      final t = tasks[i];
-                      return TaskRowCard(
-                        task: t,
-                        tags: _tagsFor(repo, t),
-                        onTap: () {
-                          repo.touchTask(t.id);
-                          context.push('/task/${t.id}');
-                        },
-                      );
-                    },
-                  ),
+            child: Row(
+              children: [
+                TaskCategoryRail(
+                  selected: _category,
+                  onSelected: _onCategoryChanged,
+                ),
+                Expanded(
+                  child: tasks.isEmpty
+                      ? const _EmptyState()
+                      : ListView.builder(
+                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 96),
+                          itemCount: tasks.length,
+                          itemBuilder: (context, i) {
+                            final t = tasks[i];
+                            return TaskRowCard(
+                              task: t,
+                              tags: _tagsFor(repo, t),
+                              onTap: () {
+                                repo.touchTask(t.id);
+                                context.push('/task/${t.id}');
+                              },
+                            );
+                          },
+                        ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
