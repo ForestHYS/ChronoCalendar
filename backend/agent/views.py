@@ -7,7 +7,7 @@ from tasks.views import err, ok
 
 from .graph import build_graph
 from .models import AgentMessage, AgentSession, ApprovalRequest
-from .serializers import AgentMessageInSerializer, AgentSessionSerializer
+from .serializers import AgentMessageInSerializer, AgentMessageOutSerializer, AgentSessionSerializer
 from .registry import run_skill
 
 
@@ -24,6 +24,10 @@ def _get_graph():
 class AgentSessionCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def get(self, request):
+        sessions = AgentSession.objects.filter(user=request.user)[:20]
+        return ok(AgentSessionSerializer(sessions, many=True).data)
+
     def post(self, request):
         s = AgentSession.objects.create(user=request.user)
         return ok(AgentSessionSerializer(s).data)
@@ -31,6 +35,11 @@ class AgentSessionCreateView(APIView):
 
 class AgentMessageCreateView(APIView):
     permission_classes = [IsAuthenticated]
+
+    def get(self, request, session_id):
+        session = get_object_or_404(AgentSession, pk=session_id, user=request.user)
+        msgs = session.messages.all()
+        return ok(AgentMessageOutSerializer(msgs, many=True).data)
 
     def post(self, request, session_id):
         session = get_object_or_404(AgentSession, pk=session_id, user=request.user)

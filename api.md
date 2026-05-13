@@ -372,15 +372,24 @@ todo：
 - **GET** `/tasks`
 
 - **Query**
-  - `type=block|ddl|todo`（可选）
-  - `q=关键词`（可选）
-  - `tag_id=...`（可选）
+  - `type=block|ddl|todo`（可选；省略则返回所有类型）
+  - `q=关键词`（可选；对 `title` 进行不区分大小写的模糊匹配）
+  - `tag_id=<id>`（可选；按单个标签过滤，向后兼容）
+  - `tag_ids=<id1>,<id2>,...`（可选；多标签 AND 过滤，逗号分隔）
   - `status=active|completed|cancelled|overdue`（可选）
-  - `sort=`
-    - ddl：`due_at_asc|due_at_desc`
-    - todo：`spent_desc|due_at_asc|due_at_desc`
-    - block：`start_at_asc|start_at_desc`
-  - `page` / `page_size`
+  - `sort=`（可选；省略时按类型自动选择默认排序）
+    - 通用：`created_at_desc`（最新创建）、`created_at_asc`
+    - ddl / todo：`due_at_asc`（默认 ddl）、`due_at_desc`
+    - todo：`spent_desc`（按累计专注时长降序）
+    - block：`start_at_asc`（默认 block）、`start_at_desc`
+  - `page`（默认 1）
+  - `page_size`（默认 20，上限 100）
+
+- **默认排序规则**（`sort` 未指定时）
+  - `type=ddl` → `due_at_asc`
+  - `type=block` → `start_at_asc`
+  - `type=todo` → `last_activity_at` 降序（最近使用优先）
+  - 混合类型 → `created_at_desc`
 
 - **Resp**
 
@@ -390,10 +399,20 @@ todo：
     "items": [
       {
         "id": "...",
-        "title": "...",
         "type": "ddl",
-        "due_at": "...",
-        "status": "active"
+        "title": "提交作业",
+        "description": "",
+        "tag_ids": ["tag_001"],
+        "tags": [{ "id": "tag_001", "name": "学习", "color": "#4F46E5" }],
+        "status": "active",
+        "due_at": "2026-04-25T16:00:00Z",
+        "remind_at": null,
+        "snoozed_until": null,
+        "focus_total_seconds": 3600,
+        "last_activity_at": "...",
+        "completed_at": null,
+        "created_at": "...",
+        "updated_at": "..."
       }
     ],
     "page": 1,

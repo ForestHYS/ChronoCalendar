@@ -140,14 +140,20 @@ class TaskSerializer(serializers.Serializer):
     # ------------------------------------------------------------------
 
     def to_representation(self, instance: Task) -> dict:
+        tags_qs = instance.tags.all()
         data = {
             "id": str(instance.id),
             "type": instance.type,
             "title": instance.title,
             "description": instance.description,
-            "tag_ids": [str(t.id) for t in instance.tags.all()],
+            "tag_ids": [str(t.id) for t in tags_qs],
+            "tags": [
+                {"id": str(t.id), "name": t.name, "color": t.color}
+                for t in tags_qs
+            ],
             "status": instance.effective_status,
             "remind_at": instance.remind_at,
+            "snoozed_until": instance.snoozed_until,
             "focus_total_seconds": instance.focus_total_seconds,
             "last_activity_at": instance.last_activity_at,
             "completed_at": instance.completed_at,
