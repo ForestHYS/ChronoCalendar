@@ -155,10 +155,12 @@ class TaskViewSet(ViewSet):
         if q:
             qs = qs.filter(title__icontains=q)
 
-        # 标签
-        tag_id = p.get("tag_id", "").strip()
-        if tag_id:
-            qs = qs.filter(tags__id=tag_id)
+        # 标签（支持单个 tag_id 或多个逗号分隔的 tag_ids）
+        tag_ids_raw = p.get("tag_ids", "") or p.get("tag_id", "")
+        tag_id_list = [t.strip() for t in tag_ids_raw.split(",") if t.strip()]
+        if tag_id_list:
+            for tid in tag_id_list:
+                qs = qs.filter(tags__id=tid)
 
         # 状态（overdue 为计算值）
         raw_status = p.get("status", "").strip()
@@ -199,6 +201,20 @@ class TaskViewSet(ViewSet):
             qs = qs.annotate(spent_total=Subquery(focus_subq)).order_by(
                 "-spent_total"
             )
+        elif sort == "created_at_desc":
+            qs = qs.order_by("-created_at")
+        elif sort == "created_at_asc":
+            qs = qs.order_by("created_at")
+        else:
+            # 类型感知默认排序
+            if task_type == "ddl":
+                qs = qs.order_by("ddl_detail__due_at")
+            elif task_type == "block":
+                qs = qs.order_by("block_detail__start_at")
+            elif task_type == "todo":
+                qs = qs.order_by("-last_activity_at")
+            else:
+                qs = qs.order_by("-created_at")
 
         # ---- 分页 ----
         try:

@@ -19,8 +19,64 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
   String? _sessionId;
   bool _sending = false;
+  bool _loading = true;
 
   final List<_ChatItem> _items = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreSession();
+  }
+
+  /// 启动时尝试恢复最近一次会话及其历史消息。
+  Future<void> _restoreSession() async {
+    try {
+      final repo = ref.read(agentRepositoryProvider);
+      final sessions = await repo.getSessions();
+      if (sessions.isNotEmpty) {
+        _sessionId = sessions.first['id'] as String?;
+        if (_sessionId != null) {
+          final msgs = await repo.getMessages(_sessionId!);
+          final restored = <_ChatItem>[];
+          for (final m in msgs) {
+            final role = m['role'] as String?;
+            if (role == 'user') {
+              restored.add(_ChatItem.user(m['content_text'] as String? ?? ''));
+            } else if (role == 'assistant') {
+              final json = m['content_json'];
+              if (json is Map<String, dynamic>) {
+                // 历史中的 open_editor 草稿和 approval_required 审批均已操作过，标记为已提交
+                final alreadyActed =
+                    json['type'] == 'open_editor' ||
+                    json['type'] == 'approval_required';
+                restored.add(
+                  _ChatItem.assistant(json, initialSubmitted: alreadyActed),
+                );
+              } else {
+                restored.add(
+                  _ChatItem.assistant({
+                    'type': 'message',
+                    'text': m['content_text'] ?? '',
+                  }),
+                );
+              }
+            }
+          }
+          if (mounted) {
+            setState(() => _items.addAll(restored));
+            WidgetsBinding.instance.addPostFrameCallback(
+              (_) => _scrollToBottom(),
+            );
+          }
+        }
+      }
+    } catch (_) {
+      // 恢复失败不影响正常使用，静默忽略
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
   @override
   void dispose() {
@@ -45,10 +101,9 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     });
     try {
       await _ensureSession();
-      final resp = await ref.read(agentRepositoryProvider).sendMessage(
-            sessionId: _sessionId!,
-            text: text,
-          );
+      final resp = await ref
+          .read(agentRepositoryProvider)
+          .sendMessage(sessionId: _sessionId!, text: text);
       setState(() {
         _items.add(_ChatItem.assistant(resp));
       });
@@ -71,6 +126,37 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     });
   }
 
+  Future<void> _startNewSession() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('开启新对话'),
+        content: const Text('是否开启新的对话界面？注意：该界面的历史信息将不会保留'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确认'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    // 创建新会话
+    try {
+      final id = await ref.read(agentRepositoryProvider).createSession();
+      setState(() {
+        _sessionId = id;
+        _items.clear();
+      });
+    } catch (e) {
+      if (mounted) await showAppErrorDialog(context, title: '创建失败', error: e);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -81,9 +167,27 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: '新对话',
+            onPressed: _startNewSession,
+          ),
+        ],
       ),
       body: Column(
         children: [
+          if (_loading)
+            const LinearProgressIndicator()
+          else if (_items.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Text(
+                '你好！我可以帮你创建任务、查询日程或回答问题。',
+                style: TextStyle(color: AppColors.onSurfaceVariant),
+                textAlign: TextAlign.center,
+              ),
+            ),
           Expanded(
             child: ListView.builder(
               controller: _scrollC,
@@ -94,11 +198,14 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 10),
                   child: Align(
-                    alignment: it.isUser ? Alignment.centerRight : Alignment.centerLeft,
+                    alignment: it.isUser
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
                     child: it.isUser
                         ? _UserBubble(text: it.text!)
                         : _AssistantCard(
                             payload: it.payload!,
+                            initialSubmitted: it.initialSubmitted,
                             onOpenEditor: _openEditorFromDraft,
                             onFollowUp: _appendAssistantPayload,
                           ),
@@ -129,7 +236,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                   FilledButton(
                     onPressed: _sending ? null : _send,
                     child: _sending
-                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : const Text('发送'),
                   ),
                 ],
@@ -154,13 +265,26 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 }
 
 class _ChatItem {
-  _ChatItem._({required this.isUser, this.text, this.payload});
+  _ChatItem._({
+    required this.isUser,
+    this.text,
+    this.payload,
+    this.initialSubmitted = false,
+  });
   final bool isUser;
   final String? text;
   final Map<String, dynamic>? payload;
+  final bool initialSubmitted;
 
   factory _ChatItem.user(String t) => _ChatItem._(isUser: true, text: t);
-  factory _ChatItem.assistant(Map<String, dynamic> payload) => _ChatItem._(isUser: false, payload: payload);
+  factory _ChatItem.assistant(
+    Map<String, dynamic> payload, {
+    bool initialSubmitted = false,
+  }) => _ChatItem._(
+    isUser: false,
+    payload: payload,
+    initialSubmitted: initialSubmitted,
+  );
 }
 
 class _UserBubble extends StatelessWidget {
@@ -185,18 +309,41 @@ class _UserBubble extends StatelessWidget {
   }
 }
 
-class _AssistantCard extends ConsumerWidget {
+class _AssistantCard extends ConsumerStatefulWidget {
   const _AssistantCard({
+    super.key,
     required this.payload,
     required this.onOpenEditor,
     required this.onFollowUp,
+    this.initialSubmitted = false,
   });
   final Map<String, dynamic> payload;
   final void Function(Map<String, dynamic> draft) onOpenEditor;
   final void Function(Map<String, dynamic> payload) onFollowUp;
+  final bool initialSubmitted;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_AssistantCard> createState() => _AssistantCardState();
+}
+
+class _AssistantCardState extends ConsumerState<_AssistantCard> {
+  late bool _submitted;
+
+  @override
+  void initState() {
+    super.initState();
+    _submitted = widget.initialSubmitted;
+  }
+
+  void _handleOpenEditor(Map<String, dynamic> draft) {
+    setState(() => _submitted = true);
+    widget.onOpenEditor(draft);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final payload = widget.payload;
+    final onFollowUp = widget.onFollowUp;
     final type = payload['type'];
     if (type == 'open_editor') {
       final draft = (payload['task_draft'] is Map<String, dynamic>)
@@ -213,22 +360,48 @@ class _AssistantCard extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text('任务草稿', style: TextStyle(fontWeight: FontWeight.w700)),
+                const Text(
+                  '任务草稿',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
                 const SizedBox(height: 8),
-                Text(_draftSummary(draft), style: const TextStyle(color: AppColors.onSurfaceVariant)),
+                Text(
+                  _draftSummary(draft),
+                  style: const TextStyle(color: AppColors.onSurfaceVariant),
+                ),
                 if (message is String && message.isNotEmpty) ...[
                   const SizedBox(height: 10),
                   Text(message),
                 ],
-                if (conflict is Map<String, dynamic>) ...[
+                if (conflict is Map<String, dynamic> && !_submitted) ...[
                   const SizedBox(height: 10),
-                  _ConflictBlock(conflict: conflict, baseDraft: draft, onOpenEditor: onOpenEditor),
+                  _ConflictBlock(
+                    conflict: conflict,
+                    baseDraft: draft,
+                    onOpenEditor: _handleOpenEditor,
+                  ),
                 ],
                 const SizedBox(height: 12),
-                FilledButton(
-                  onPressed: () => onOpenEditor(draft),
-                  child: const Text('打开编辑页'),
-                ),
+                if (_submitted)
+                  Row(
+                    children: const [
+                      Icon(
+                        Icons.check_circle_outline,
+                        size: 16,
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                      SizedBox(width: 6),
+                      Text(
+                        '已发送至编辑页',
+                        style: TextStyle(color: AppColors.onSurfaceVariant),
+                      ),
+                    ],
+                  )
+                else
+                  FilledButton(
+                    onPressed: () => _handleOpenEditor(draft),
+                    child: const Text('打开编辑页'),
+                  ),
               ],
             ),
           ),
@@ -258,49 +431,86 @@ class _AssistantCard extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                const Text('需要授权', style: TextStyle(fontWeight: FontWeight.w700)),
+                const Text(
+                  '需要授权',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
                 const SizedBox(height: 8),
                 Text(summary),
                 const SizedBox(height: 12),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: approvalId == null
-                            ? null
-                            : () async {
-                                try {
-                                  final r = await ref.read(agentRepositoryProvider).rejectApproval(approvalId);
-                                  onFollowUp(r);
-                                } catch (e) {
-                                  if (context.mounted) {
-                                    await showAppErrorDialog(context, title: '操作失败', error: e);
-                                  }
-                                }
-                              },
-                        child: const Text('拒绝'),
+                if (_submitted)
+                  Row(
+                    children: const [
+                      Icon(
+                        Icons.check_circle_outline,
+                        size: 16,
+                        color: AppColors.onSurfaceVariant,
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: FilledButton(
-                        onPressed: approvalId == null
-                            ? null
-                            : () async {
-                                try {
-                                  final r = await ref.read(agentRepositoryProvider).approveApproval(approvalId);
-                                  onFollowUp(r);
-                                } catch (e) {
-                                  if (context.mounted) {
-                                    await showAppErrorDialog(context, title: '操作失败', error: e);
-                                  }
-                                }
-                              },
-                        child: const Text('批准'),
+                      SizedBox(width: 6),
+                      Text(
+                        '已处理',
+                        style: TextStyle(color: AppColors.onSurfaceVariant),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  )
+                else
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: approvalId == null
+                              ? null
+                              : () async {
+                                  try {
+                                    final r = await ref
+                                        .read(agentRepositoryProvider)
+                                        .rejectApproval(approvalId);
+                                    setState(() => _submitted = true);
+                                    onFollowUp(r);
+                                  } catch (e) {
+                                    if (context.mounted) {
+                                      await showAppErrorDialog(
+                                        context,
+                                        title: '操作失败',
+                                        error: e,
+                                      );
+                                    }
+                                  }
+                                },
+                          child: const Text('拒绝'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: approvalId == null
+                              ? null
+                              : () async {
+                                  try {
+                                    final r = await ref
+                                        .read(agentRepositoryProvider)
+                                        .approveApproval(approvalId);
+                                    // 批准后同步本地任务缓存，使主页立即反映变更
+                                    await ref
+                                        .read(taskRepositoryProvider)
+                                        .refreshTasks();
+                                    setState(() => _submitted = true);
+                                    onFollowUp(r);
+                                  } catch (e) {
+                                    if (context.mounted) {
+                                      await showAppErrorDialog(
+                                        context,
+                                        title: '操作失败',
+                                        error: e,
+                                      );
+                                    }
+                                  }
+                                },
+                          child: const Text('批准'),
+                        ),
+                      ),
+                    ],
+                  ),
               ],
             ),
           ),
@@ -323,13 +533,15 @@ class _AssistantCard extends ConsumerWidget {
                 const SizedBox(height: 10),
                 if (items is List && items.isNotEmpty)
                   ...items.take(8).map((e) {
-                    if (e is! Map<String, dynamic>) return const SizedBox.shrink();
+                    if (e is! Map<String, dynamic>)
+                      return const SizedBox.shrink();
                     final title = e['title'] as String? ?? '';
                     final t = e['type'] as String? ?? '';
                     final startAt = e['start_at'] as String?;
                     final endAt = e['end_at'] as String?;
                     final dueAt = e['due_at'] as String?;
-                    final subtitle = (t == 'block' && startAt != null && endAt != null)
+                    final subtitle =
+                        (t == 'block' && startAt != null && endAt != null)
                         ? '$startAt - $endAt'
                         : (dueAt ?? '');
                     return Padding(
@@ -337,15 +549,26 @@ class _AssistantCard extends ConsumerWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          Text(
+                            title,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
                           if (subtitle.isNotEmpty)
-                            Text(subtitle, style: const TextStyle(color: AppColors.onSurfaceVariant)),
+                            Text(
+                              subtitle,
+                              style: const TextStyle(
+                                color: AppColors.onSurfaceVariant,
+                              ),
+                            ),
                         ],
                       ),
                     );
                   })
                 else
-                  const Text('未找到匹配任务', style: TextStyle(color: AppColors.onSurfaceVariant)),
+                  const Text(
+                    '未找到匹配任务',
+                    style: TextStyle(color: AppColors.onSurfaceVariant),
+                  ),
               ],
             ),
           ),
@@ -360,10 +583,7 @@ class _AssistantCard extends ConsumerWidget {
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 340),
       child: Card(
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Text(text),
-        ),
+        child: Padding(padding: const EdgeInsets.all(14), child: Text(text)),
       ),
     );
   }
@@ -381,7 +601,11 @@ class _AssistantCard extends ConsumerWidget {
 }
 
 class _ConflictBlock extends StatelessWidget {
-  const _ConflictBlock({required this.conflict, required this.baseDraft, required this.onOpenEditor});
+  const _ConflictBlock({
+    required this.conflict,
+    required this.baseDraft,
+    required this.onOpenEditor,
+  });
 
   final Map<String, dynamic> conflict;
   final Map<String, dynamic> baseDraft;
@@ -405,7 +629,10 @@ class _ConflictBlock extends StatelessWidget {
             final en = e['end_at'] as String? ?? '';
             return Padding(
               padding: const EdgeInsets.only(bottom: 4),
-              child: Text('· $t（$s - $en）', style: const TextStyle(color: AppColors.onSurfaceVariant)),
+              child: Text(
+                '· $t（$s - $en）',
+                style: const TextStyle(color: AppColors.onSurfaceVariant),
+              ),
             );
           }),
         if (suggestions is List && suggestions.isNotEmpty) ...[
@@ -432,4 +659,3 @@ class _ConflictBlock extends StatelessWidget {
     );
   }
 }
-

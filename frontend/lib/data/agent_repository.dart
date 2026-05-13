@@ -6,7 +6,12 @@ class AgentRepository {
   final ApiClient _api;
 
   Future<String> createSession() async {
-    final data = await _api.request('POST', 'agent/sessions/', body: {}, auth: true);
+    final data = await _api.request(
+      'POST',
+      'agent/sessions/',
+      body: {},
+      auth: true,
+    );
     if (data is Map<String, dynamic>) {
       final id = data['id'];
       if (id is String && id.isNotEmpty) return id;
@@ -33,6 +38,24 @@ class AgentRepository {
       if (resp is Map<String, dynamic>) return resp;
     }
     throw StateError('发送失败');
+  }
+
+  /// 获取当前用户的会话列表（按 updated_at 倒序，最多 20 条）。
+  Future<List<Map<String, dynamic>>> getSessions() async {
+    final data = await _api.request('GET', 'agent/sessions/', auth: true);
+    if (data is List) return data.whereType<Map<String, dynamic>>().toList();
+    return [];
+  }
+
+  /// 获取指定会话的所有消息（按 created_at 正序）。
+  Future<List<Map<String, dynamic>>> getMessages(String sessionId) async {
+    final data = await _api.request(
+      'GET',
+      'agent/sessions/$sessionId/messages/',
+      auth: true,
+    );
+    if (data is List) return data.whereType<Map<String, dynamic>>().toList();
+    return [];
   }
 
   /// 批准高危操作（如删除任务）；返回与消息接口一致的 `response`。
@@ -64,4 +87,3 @@ class AgentRepository {
     throw StateError('拒绝失败');
   }
 }
-
