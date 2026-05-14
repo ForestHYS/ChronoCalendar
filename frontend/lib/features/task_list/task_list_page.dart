@@ -148,6 +148,7 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
           ),
           Expanded(
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 TaskCategoryRail(
                   selected: _category,

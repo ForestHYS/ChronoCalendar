@@ -31,6 +31,31 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
   late final TextEditingController _expectedC = TextEditingController();
   /// 新建任务：首帧后创建 block 草稿；已有任务：路由传入 id。
   String? _tid;
+  /// 新建任务首次保存成功前，返回页面应删除服务端草稿。
+  bool _savedNewOnce = false;
+
+  /// 编辑态本地草稿（保存前不写库）；进入编辑时从 [Task] 拷贝。
+  List<String>? _draftTagIds;
+  DateTime? _draftStartAt;
+  DateTime? _draftEndAt;
+  DateTime? _draftRemindAt;
+  DateTime? _draftDueAt;
+
+  void _initDraftsFromTask(Task t) {
+    _draftTagIds = List<String>.from(t.tagIds);
+    _draftStartAt = t.startAt;
+    _draftEndAt = t.endAt;
+    _draftRemindAt = t.remindAt;
+    _draftDueAt = t.dueAt;
+  }
+
+  void _clearDrafts() {
+    _draftTagIds = null;
+    _draftStartAt = null;
+    _draftEndAt = null;
+    _draftRemindAt = null;
+    _draftDueAt = null;
+  }
 
   @override
   void initState() {
@@ -60,12 +85,14 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
             _tid = id;
             _editing = true;
           });
-          var t0 = ref.read(taskRepositoryProvider).taskById(id)!;
+          final t0 = ref.read(taskRepositoryProvider).taskById(id)!;
+          _initDraftsFromTask(t0);
+          _fillControllers(t0);
           final draft = _readAgentDraft(widget.initialExtra);
           if (draft != null) {
-            t0 = await _applyAgentDraft(t0, draft);
+            _applyAgentDraftLocal(draft);
           }
-          _fillControllers(t0);
+          if (mounted) setState(() {});
         } catch (e) {
           if (!mounted) return;
           await showAppErrorDialog(context, title: '创建失败', error: e);
@@ -92,7 +119,8 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     }
   }
 
-  Future<Task> _applyAgentDraft(Task base, Map<String, dynamic> draft) async {
+  /// 将 Agent 草稿写入本地控制器与草稿字段（保存前不调 PATCH）。
+  void _applyAgentDraftLocal(Map<String, dynamic> draft) {
     final title = (draft['title'] as String?)?.trim();
     final desc = (draft['description'] as String?)?.trim();
     final startAt = _parseIso(draft['start_at'] as String?);
@@ -103,16 +131,18 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
         ? tagIdsRaw.whereType<String>().toList()
         : <String>[];
 
-    final next = base.copyWith(
-      title: title?.isNotEmpty == true ? title! : base.title,
-      description: desc ?? base.description,
-      startAt: startAt ?? base.startAt,
-      endAt: endAt ?? base.endAt,
-      dueAt: dueAt ?? base.dueAt,
-      tagIds: tagIds.isNotEmpty ? tagIds : base.tagIds,
-    );
-    await ref.read(taskRepositoryProvider).updateTask(next);
-    return ref.read(taskRepositoryProvider).taskById(next.id) ?? next;
+    if (title?.isNotEmpty == true) {
+      _titleC.text = title!;
+    }
+    if (desc != null) {
+      _descC.text = desc;
+    }
+    if (startAt != null) _draftStartAt = startAt;
+    if (endAt != null) _draftEndAt = endAt;
+    if (dueAt != null) _draftDueAt = dueAt;
+    if (tagIds.isNotEmpty) {
+      _draftTagIds = List<String>.from(tagIds);
+    }
   }
 
   @override
@@ -129,46 +159,145 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     _expectedC.text = t.expectedMinutes?.toString() ?? '';
   }
 
+  /// 将当前编辑区的文本与草稿合并到 [serverT]（用于保存、类型切换、脏检查）。
+  Task _composeTaskForSave(Task serverT) {
+    final tagIds = _draftTagIds ?? serverT.tagIds;
+    var next = serverT.copyWith(
+      title: _titleC.text.trim(),
+      description: _descC.text,
+      tagIds: tagIds,
+    );
+    switch (serverT.type) {
+      case TaskType.block:
+        final s = _draftStartAt ?? serverT.startAt;
+        final e = _draftEndAt ?? serverT.endAt;
+        next = next.copyWith(startAt: s, endAt: e);
+        if (_draftRemindAt != null) {
+          next = next.copyWith(remindAt: _draftRemindAt, clearRemindAt: false);
+        } else if (serverT.remindAt != null) {
+          next = next.copyWith(clearRemindAt: true);
+        }
+        break;
+      case TaskType.ddl:
+        final d = _draftDueAt ?? serverT.dueAt;
+        next = next.copyWith(dueAt: d, clearDueAt: d == null && serverT.dueAt != null);
+        if (_draftRemindAt != null) {
+          next = next.copyWith(remindAt: _draftRemindAt, clearRemindAt: false);
+        } else if (serverT.remindAt != null) {
+          next = next.copyWith(clearRemindAt: true);
+        }
+        break;
+      case TaskType.todo:
+        final nMin = int.tryParse(_expectedC.text.trim());
+        next = next.copyWith(
+          expectedMinutes: nMin,
+          clearExpectedMinutes: nMin == null,
+        );
+        if (_draftDueAt != null) {
+          next = next.copyWith(dueAt: _draftDueAt, clearDueAt: false);
+        } else if (serverT.dueAt != null) {
+          next = next.copyWith(clearDueAt: true);
+        }
+        if (_draftRemindAt != null) {
+          next = next.copyWith(remindAt: _draftRemindAt, clearRemindAt: false);
+        } else if (serverT.remindAt != null) {
+          next = next.copyWith(clearRemindAt: true);
+        }
+        break;
+    }
+    return next;
+  }
+
+  static bool _dtEq(DateTime? a, DateTime? b) =>
+      a?.millisecondsSinceEpoch == b?.millisecondsSinceEpoch;
+
+  static bool _listEq(List<String> a, List<String> b) =>
+      Set<String>.from(a) == Set<String>.from(b);
+
+  bool _hasUnsavedChanges(Task t) {
+    if (!_editing || _draftTagIds == null) return false;
+    final c = _composeTaskForSave(t);
+    if (c.title != t.title || c.description != t.description) return true;
+    if (!_listEq(c.tagIds, t.tagIds)) return true;
+    switch (t.type) {
+      case TaskType.block:
+        return !_dtEq(c.startAt, t.startAt) ||
+            !_dtEq(c.endAt, t.endAt) ||
+            !_dtEq(c.remindAt, t.remindAt);
+      case TaskType.ddl:
+        return !_dtEq(c.dueAt, t.dueAt) || !_dtEq(c.remindAt, t.remindAt);
+      case TaskType.todo:
+        return c.expectedMinutes != t.expectedMinutes ||
+            !_dtEq(c.dueAt, t.dueAt) ||
+            !_dtEq(c.remindAt, t.remindAt);
+    }
+  }
+
+  static bool _blockIntervalsOverlap(DateTime a0, DateTime a1, DateTime b0, DateTime b1) {
+    return a0.isBefore(b1) && b0.isBefore(a1);
+  }
+
+  /// 与其它进行中的 block 任务时间段是否重叠（不含当前任务）。
+  String? _blockTimeOverlapMessage(TaskRepository repo, Task self, DateTime start, DateTime end) {
+    final df = DateFormat('yyyy-MM-dd HH:mm');
+    for (final o in repo.tasks) {
+      if (o.id == self.id || o.type != TaskType.block) continue;
+      if (o.status != TaskStatus.active && o.status != TaskStatus.overdue) continue;
+      final os = o.startAt;
+      final oe = o.endAt;
+      if (os == null || oe == null) continue;
+      if (_blockIntervalsOverlap(start, end, os, oe)) {
+        return '与固定时段任务「${o.title}」重叠（${df.format(os)}–${df.format(oe)}）。请调整本任务的开始与结束时间。';
+      }
+    }
+    return null;
+  }
+
   Future<void> _switchTaskType(TaskRepository repo, Task t, TaskType nextType) async {
     if (t.type == nextType) return;
+    final base = (_editing && _draftTagIds != null) ? _composeTaskForSave(t) : t;
     final now = DateTime.now();
     Task n;
     switch (nextType) {
       case TaskType.block:
-        n = t.copyWith(
+        n = base.copyWith(
           type: TaskType.block,
           clearDueAt: true,
           clearExpectedMinutes: true,
           subtasks: const [],
-          startAt: t.startAt ?? now,
-          endAt: t.endAt ?? now.add(const Duration(hours: 1)),
+          startAt: base.startAt ?? now,
+          endAt: base.endAt ?? now.add(const Duration(hours: 1)),
         );
         break;
       case TaskType.ddl:
-        n = t.copyWith(
+        n = base.copyWith(
           type: TaskType.ddl,
           clearStartAt: true,
           clearEndAt: true,
           clearExpectedMinutes: true,
           subtasks: const [],
-          dueAt: t.dueAt ?? t.endAt ?? now.add(const Duration(days: 1)),
+          dueAt: base.dueAt ?? base.endAt ?? now.add(const Duration(days: 1)),
         );
         break;
       case TaskType.todo:
-        n = t.copyWith(
+        n = base.copyWith(
           type: TaskType.todo,
           clearStartAt: true,
           clearEndAt: true,
-          dueAt: t.dueAt ?? t.endAt ?? t.startAt ?? now.add(const Duration(days: 1)),
-          subtasks: t.type == TaskType.todo ? t.subtasks : const [],
+          dueAt: base.dueAt ?? base.endAt ?? base.startAt ?? now.add(const Duration(days: 1)),
+          subtasks: base.type == TaskType.todo ? base.subtasks : const [],
         );
         break;
     }
     try {
       final newId = await repo.replaceTaskWithNewType(n);
       if (!mounted) return;
-      setState(() => _tid = newId);
-      _fillControllers(repo.taskById(newId)!);
+      final tNew = repo.taskById(newId)!;
+      setState(() {
+        _tid = newId;
+        _initDraftsFromTask(tNew);
+        _fillControllers(tNew);
+      });
     } catch (e) {
       if (!mounted) return;
       await showAppErrorDialog(context, title: '切换类型失败', error: e);
@@ -194,23 +323,136 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
   }
 
   Future<void> _save(Task current) async {
-    var next = current.copyWith(
-      title: _titleC.text.trim(),
-      description: _descC.text,
-    );
-    if (next.type == TaskType.todo) {
-      final n = int.tryParse(_expectedC.text.trim());
-      next = next.copyWith(expectedMinutes: n, clearExpectedMinutes: n == null);
+    final repo = ref.read(taskRepositoryProvider);
+    final next = _composeTaskForSave(current);
+    if (next.type == TaskType.block) {
+      final s = next.startAt;
+      final e = next.endAt;
+      if (s == null || e == null) {
+        if (!mounted) return;
+        await showAppErrorDialog(
+          context,
+          title: '无法保存',
+          error: Exception('请设置 block 任务的开始与结束时间'),
+        );
+        return;
+      }
+      if (!e.isAfter(s)) {
+        if (!mounted) return;
+        await showAppErrorDialog(
+          context,
+          title: '时间无效',
+          error: Exception('结束时间必须晚于开始时间'),
+        );
+        return;
+      }
+      final overlap = _blockTimeOverlapMessage(repo, current, s, e);
+      if (overlap != null) {
+        if (!mounted) return;
+        await showAppErrorDialog(
+          context,
+          title: '时间冲突',
+          error: Exception(overlap),
+        );
+        return;
+      }
     }
     try {
-      await ref.read(taskRepositoryProvider).updateTask(next);
+      await repo.updateTask(next);
       if (!mounted) return;
-      setState(() => _editing = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已保存')));
+      setState(() {
+        _editing = false;
+        _clearDrafts();
+        if (widget.taskId == null) _savedNewOnce = true;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已保存')));
+      }
     } catch (e) {
       if (!mounted) return;
       await showAppErrorDialog(context, title: '保存失败', error: e);
     }
+  }
+
+  void _enterEditMode(Task t) {
+    setState(() {
+      _editing = true;
+      _initDraftsFromTask(t);
+      _fillControllers(t);
+    });
+  }
+
+  Future<bool> _prepareLeave() async {
+    final repo = ref.read(taskRepositoryProvider);
+    final tid = _tid;
+    if (tid == null) return true;
+
+    final t = repo.taskById(tid);
+    if (t == null) return true;
+
+    if (widget.taskId == null && !_savedNewOnce) {
+      final dirty = _hasUnsavedChanges(t);
+      if (dirty) {
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('放弃创建？'),
+            content: const Text('有未保存的修改，确定放弃并删除该草稿任务？'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('放弃'),
+              ),
+            ],
+          ),
+        );
+        if (ok != true) return false;
+      }
+      try {
+        await repo.deleteTask(tid);
+      } catch (_) {}
+      return true;
+    }
+
+    if (_editing && _hasUnsavedChanges(t)) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('放弃更改？'),
+          content: const Text('有未保存的修改，确定离开？'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('放弃')),
+          ],
+        ),
+      );
+      if (ok != true) return false;
+      try {
+        await repo.refreshTasks();
+      } catch (_) {}
+      if (!mounted) return false;
+      final t2 = ref.read(taskRepositoryProvider).taskById(tid);
+      if (t2 != null) _fillControllers(t2);
+      setState(() {
+        _editing = false;
+        _clearDrafts();
+      });
+      return true;
+    }
+
+    return true;
+  }
+
+  Future<void> _onPopInvoked(bool didPop, dynamic result) async {
+    if (didPop) return;
+    if (!await _prepareLeave()) return;
+    if (mounted) context.pop();
+  }
+
+  Future<void> _onBackPressed() async {
+    if (!await _prepareLeave()) return;
+    if (mounted) context.pop();
   }
 
   Future<void> _delete() async {
@@ -282,7 +524,13 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
 
     final df = DateFormat('yyyy-MM-dd HH:mm');
 
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (didPop) return;
+        unawaited(_onPopInvoked(didPop, result));
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Text(
           widget.taskId == null
@@ -291,7 +539,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
         ),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () => unawaited(_onBackPressed()),
         ),
       ),
       body: Column(
@@ -331,11 +579,11 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                 const SizedBox(height: 16),
                 const Text('标签', style: TextStyle(fontWeight: FontWeight.w500)),
                 const SizedBox(height: 8),
-                if (_editing)
+                if (_editing && _draftTagIds != null)
                   _TagEditor(
                     allTags: repo.tags,
-                    selectedIds: t.tagIds,
-                    onChanged: (ids) => unawaited(repo.updateTask(t.copyWith(tagIds: ids))),
+                    selectedIds: _draftTagIds!,
+                    onChanged: (ids) => setState(() => _draftTagIds = ids),
                   )
                 else
                   Wrap(
@@ -415,8 +663,7 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                           if (_editing) {
                             await _save(repo.taskById(t.id)!);
                           } else {
-                            _fillControllers(t);
-                            setState(() => _editing = true);
+                            _enterEditMode(t);
                           }
                         },
                         child: Text(_editing ? '保存' : '编辑'),
@@ -437,7 +684,8 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
           ),
         ],
       ),
-    );
+    ),
+  );
   }
 
   Widget _typeLabel(TaskType type) {
@@ -450,75 +698,132 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
   }
 
   List<Widget> _typeFields(BuildContext context, Task t, DateFormat df) {
-    final fieldContext = context;
-    Future<void> update(Task next) async {
-      try {
-        await ref.read(taskRepositoryProvider).updateTask(next);
-        if (mounted) setState(() {});
-      } catch (e) {
-        if (!mounted || !fieldContext.mounted) return;
-        await showAppErrorDialog(fieldContext, title: '更新失败', error: e);
-      }
-    }
+    final editing = _editing && _draftTagIds != null;
+
+    Widget readRow(String label, DateTime? value) => _timeRowReadOnly(label, value, df);
 
     return [
       if (t.type == TaskType.block) ...[
-        _dateRow('开始', t.startAt, df, _editing, () async {
-          final dt = await _pickDateTime(t.startAt);
-          if (dt != null) await update(t.copyWith(startAt: dt));
-        }),
-        _dateRow('结束', t.endAt, df, _editing, () async {
-          final dt = await _pickDateTime(t.endAt);
-          if (dt != null) await update(t.copyWith(endAt: dt));
-        }),
-        _dateRow('提醒', t.remindAt, df, _editing, () async {
-          final dt = await _pickDateTime(t.remindAt);
-          if (dt != null) await update(t.copyWith(remindAt: dt));
-        }, onClear: t.remindAt != null ? () => update(t.copyWith(clearRemindAt: true)) : null),
+        if (!editing) ...[
+          readRow('开始', t.startAt),
+          readRow('结束', t.endAt),
+          readRow('提醒', t.remindAt),
+        ] else ...[
+          _timeRowEditable(
+            label: '开始',
+            value: _draftStartAt ?? t.startAt,
+            df: df,
+            blockPrimaryHint: true,
+            onPick: () async {
+              final dt = await _pickDateTime(_draftStartAt ?? t.startAt);
+              if (dt != null && mounted) setState(() => _draftStartAt = dt);
+            },
+          ),
+          _timeRowEditable(
+            label: '结束',
+            value: _draftEndAt ?? t.endAt,
+            df: df,
+            blockPrimaryHint: true,
+            onPick: () async {
+              final dt = await _pickDateTime(_draftEndAt ?? t.endAt);
+              if (dt != null && mounted) setState(() => _draftEndAt = dt);
+            },
+          ),
+          _timeRowEditable(
+            label: '提醒',
+            value: _draftRemindAt,
+            df: df,
+            blockPrimaryHint: false,
+            onPick: () async {
+              final dt = await _pickDateTime(_draftRemindAt ?? t.remindAt);
+              if (dt != null && mounted) setState(() => _draftRemindAt = dt);
+            },
+            onClear: (t.remindAt != null || _draftRemindAt != null)
+                ? () => setState(() => _draftRemindAt = null)
+                : null,
+          ),
+        ],
       ],
       if (t.type == TaskType.ddl) ...[
-        _dateRow('截止', t.dueAt, df, _editing, () async {
-          final dt = await _pickDateTime(t.dueAt);
-          if (dt != null) await update(t.copyWith(dueAt: dt));
-        }),
-        _dateRow('提醒', t.remindAt, df, _editing, () async {
-          final dt = await _pickDateTime(t.remindAt);
-          if (dt != null) await update(t.copyWith(remindAt: dt));
-        }, onClear: t.remindAt != null ? () => update(t.copyWith(clearRemindAt: true)) : null),
+        if (!editing) ...[
+          readRow('截止', t.dueAt),
+          readRow('提醒', t.remindAt),
+        ] else ...[
+          _timeRowEditable(
+            label: '截止',
+            value: _draftDueAt ?? t.dueAt,
+            df: df,
+            blockPrimaryHint: false,
+            onPick: () async {
+              final dt = await _pickDateTime(_draftDueAt ?? t.dueAt);
+              if (dt != null && mounted) setState(() => _draftDueAt = dt);
+            },
+          ),
+          _timeRowEditable(
+            label: '提醒',
+            value: _draftRemindAt,
+            df: df,
+            blockPrimaryHint: false,
+            onPick: () async {
+              final dt = await _pickDateTime(_draftRemindAt ?? t.remindAt);
+              if (dt != null && mounted) setState(() => _draftRemindAt = dt);
+            },
+            onClear: (t.remindAt != null || _draftRemindAt != null)
+                ? () => setState(() => _draftRemindAt = null)
+                : null,
+          ),
+        ],
       ],
       if (t.type == TaskType.todo) ...[
-        if (_editing)
+        if (!editing)
+          Text('预计投入：${t.expectedMinutes ?? '—'} 分钟')
+        else
           TextField(
             controller: _expectedC,
             decoration: const InputDecoration(labelText: '预计投入（分钟）'),
             keyboardType: TextInputType.number,
-          )
-        else
-          Text('预计投入：${t.expectedMinutes ?? '—'} 分钟'),
+          ),
         const SizedBox(height: 8),
-        _dateRow('截止', t.dueAt, df, _editing, () async {
-          final dt = await _pickDateTime(t.dueAt);
-          if (dt != null) await update(t.copyWith(dueAt: dt));
-        }, onClear: t.dueAt != null ? () => update(t.copyWith(clearDueAt: true)) : null),
-        _dateRow('提醒', t.remindAt, df, _editing, () async {
-          final dt = await _pickDateTime(t.remindAt);
-          if (dt != null) await update(t.copyWith(remindAt: dt));
-        }, onClear: t.remindAt != null ? () => update(t.copyWith(clearRemindAt: true)) : null),
+        if (!editing) ...[
+          readRow('截止', t.dueAt),
+          readRow('提醒', t.remindAt),
+        ] else ...[
+          _timeRowEditable(
+            label: '截止',
+            value: _draftDueAt ?? t.dueAt,
+            df: df,
+            blockPrimaryHint: false,
+            onPick: () async {
+              final dt = await _pickDateTime(_draftDueAt ?? t.dueAt);
+              if (dt != null && mounted) setState(() => _draftDueAt = dt);
+            },
+            onClear: (t.dueAt != null || _draftDueAt != null)
+                ? () => setState(() => _draftDueAt = null)
+                : null,
+          ),
+          _timeRowEditable(
+            label: '提醒',
+            value: _draftRemindAt,
+            df: df,
+            blockPrimaryHint: false,
+            onPick: () async {
+              final dt = await _pickDateTime(_draftRemindAt ?? t.remindAt);
+              if (dt != null && mounted) setState(() => _draftRemindAt = dt);
+            },
+            onClear: (t.remindAt != null || _draftRemindAt != null)
+                ? () => setState(() => _draftRemindAt = null)
+                : null,
+          ),
+        ],
       ],
     ];
   }
 
-  Widget _dateRow(
-    String label,
-    DateTime? value,
-    DateFormat df,
-    bool editing,
-    VoidCallback onPick, {
-    VoidCallback? onClear,
-  }) {
+  Widget _timeRowReadOnly(String label, DateTime? value, DateFormat df) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
             width: 56,
@@ -527,9 +832,72 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
           Expanded(
             child: Text(value != null ? df.format(value) : '未设置'),
           ),
-          if (editing) ...[
-            TextButton(onPressed: onPick, child: const Text('选择')),
-            if (onClear != null) TextButton(onPressed: onClear, child: const Text('清除')),
+        ],
+      ),
+    );
+  }
+
+  Widget _timeRowEditable({
+    required String label,
+    required DateTime? value,
+    required DateFormat df,
+    required Future<void> Function() onPick,
+    required bool blockPrimaryHint,
+    VoidCallback? onClear,
+  }) {
+    final hintColor = AppColors.onSurfaceVariant;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 56,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 10),
+              child: Text(label, style: const TextStyle(color: AppColors.onSurfaceVariant)),
+            ),
+          ),
+          Expanded(
+            child: Material(
+              color: AppColors.surfaceContainerHigh.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
+                onTap: () => unawaited(onPick()),
+                borderRadius: BorderRadius.circular(10),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        value != null ? df.format(value) : '未设置',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Icon(
+                            blockPrimaryHint ? Icons.edit_calendar_outlined : Icons.touch_app_outlined,
+                            size: 15,
+                            color: hintColor,
+                          ),
+                          const SizedBox(width: 5),
+                          Text(
+                            blockPrimaryHint ? '点击修改时间' : '点击修改',
+                            style: TextStyle(fontSize: 12.5, color: hintColor, fontWeight: FontWeight.w500),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (onClear != null) ...[
+            const SizedBox(width: 4),
+            TextButton(onPressed: onClear, child: const Text('清除')),
           ],
         ],
       ),
