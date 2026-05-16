@@ -150,6 +150,43 @@ class TaskViewSet(ViewSet):
                     return err("INVALID_PARAM", "start_to 不是有效的 datetime")
                 qs = qs.filter(block_detail__start_at__lte=start_to)
 
+        # Calendar range filter. This enhances GET /tasks/ without adding
+        # another calendar-specific endpoint.
+        range_from_raw = p.get("range_from")
+        range_to_raw = p.get("range_to")
+        if range_from_raw or range_to_raw:
+            if not range_from_raw or not range_to_raw:
+                return err(
+                    "INVALID_PARAM",
+                    "range_from and range_to must be provided together",
+                )
+            range_from = parse_datetime(range_from_raw)
+            range_to = parse_datetime(range_to_raw)
+            if range_from is None or range_to is None:
+                return err(
+                    "INVALID_PARAM",
+                    "range_from/range_to must be valid datetimes",
+                )
+            if range_to <= range_from:
+                return err("INVALID_PARAM", "range_to must be after range_from")
+            qs = qs.filter(
+                Q(
+                    type="block",
+                    block_detail__start_at__lt=range_to,
+                    block_detail__end_at__gt=range_from,
+                )
+                | Q(
+                    type="ddl",
+                    ddl_detail__due_at__gte=range_from,
+                    ddl_detail__due_at__lt=range_to,
+                )
+                | Q(
+                    type="todo",
+                    todo_detail__due_at__gte=range_from,
+                    todo_detail__due_at__lt=range_to,
+                )
+            )
+
         # 关键词搜索（标题）
         q = p.get("q", "").strip()
         if q:

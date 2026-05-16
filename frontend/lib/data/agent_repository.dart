@@ -29,6 +29,7 @@ class AgentRepository {
       'agent/sessions/$sessionId/messages/',
       body: {
         'text': text,
+        // ignore: use_null_aware_elements
         if (clientContext != null) 'client_context': clientContext,
       },
       auth: true,
