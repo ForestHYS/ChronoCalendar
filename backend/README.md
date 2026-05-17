@@ -33,6 +33,8 @@ python manage.py runserver
 | 新增子任务 | `POST` | `/api/v1/tasks/{id}/subtasks/` |
 | 更新子任务 | `PATCH` | `/api/v1/subtasks/{id}/` |
 | 删除子任务 | `DELETE` | `/api/v1/subtasks/{id}/` |
+| 导出全部数据 | `GET` | `/api/v1/tasks/export/` |
+| 导入数据 | `POST` | `/api/v1/tasks/import/?mode=merge\|duplicate` |
 
 ---
 
@@ -554,6 +556,123 @@ DELETE /subtasks/{subtaskId}/
 
 ---
 
+## 导入 / 导出
+
+### 导出全部数据
+
+```
+GET /tasks/export/
+```
+
+无需任何参数。返回当前用户的**全量任务、标签、子任务、专注会话**，可保存为 JSON 文件用于备份。
+
+**成功响应（200）：**
+
+```json
+{
+  "data": {
+    "version": 1,
+    "exported_at": "2026-05-16T12:00:00Z",
+    "tags": [
+      { "id": "tag-uuid", "name": "工作", "color": "#6366F1" }
+    ],
+    "tasks": [
+      {
+        "id": "task-uuid",
+        "type": "block",
+        "title": "周会",
+        "description": "",
+        "status": "active",
+        "remind_at": null,
+        "created_at": "2026-05-10T03:00:00Z",
+        "completed_at": null,
+        "cancelled_at": null,
+        "tag_ids": ["tag-uuid"],
+        "block": { "start_at": "...", "end_at": "..." },
+        "focus_sessions": [
+          {
+            "id": "fs-uuid",
+            "status": "stopped",
+            "started_at": "...",
+            "ended_at": "...",
+            "planned_seconds": 1500,
+            "actual_seconds": 1480,
+            "stop_reason": "timeout",
+            "noise_id": ""
+          }
+        ]
+      },
+      {
+        "id": "...",
+        "type": "todo",
+        "title": "...",
+        "todo": { "due_at": null, "expected_minutes": 120 },
+        "subtasks": [
+          {
+            "id": "...",
+            "title": "...",
+            "done": true,
+            "order": 1,
+            "done_at": "...",
+            "created_at": "..."
+          }
+        ],
+        "...": "..."
+      }
+    ]
+  }
+}
+```
+
+> 字段说明：`type=block` 带 `block`；`type=ddl` 带 `ddl`；`type=todo` 带 `todo` 和 `subtasks`。
+>
+> **不导出**的字段（导入时由服务端重建）：`last_activity_at`、`snoozed_until`、`updated_at`。
+
+---
+
+### 导入数据
+
+```
+POST /tasks/import/?mode=merge
+POST /tasks/import/?mode=duplicate
+```
+
+**请求体**：即导出端点返回的 `data` 部分（不带 `{"data": ...}` 包装）。
+
+**Query 参数 `mode`**（默认 `merge`）：
+
+| mode | 行为 |
+|---|---|
+| `merge` | UUID 与库内已有任务匹配 → 整体覆盖；否则按文件 UUID 新建。**幂等**，适合"还原备份"。 |
+| `duplicate` | 全部生成新 UUID（包括子任务、专注会话），始终新建。适合"复制一份" / 跨账号导入。 |
+
+> **标签**始终按 `name` 在当前用户下"找不到则创建"，与 `mode` 无关 —— 同名标签不会重复。
+
+**成功响应（200）：**
+
+```json
+{
+  "data": {
+    "mode": "merge",
+    "tags": { "created": 1, "reused": 2 },
+    "tasks": { "created": 5, "updated": 3 }
+  }
+}
+```
+
+**事务原子**：导入过程中任何一条记录失败，整个导入回滚，不会留下半成品。
+
+**常见失败：**
+
+| 错误 message | 原因 |
+|---|---|
+| `不支持的导出版本: ...` | 文件 `version` 与服务端 `EXPORT_VERSION` 不匹配 |
+| `任务 X 的 type 与库内记录不一致` | merge 模式下，文件中某任务 UUID 已在库存在，但 `type` 不同（type 不可变） |
+| `任务 X 引用未声明的 tag_id: ...` | 任务 `tag_ids` 引用了不在文件 `tags[]` 中的标签 |
+| `任务 X (block) end_at 必须晚于 start_at` | 违反 `task_block` 的 CHECK 约束 |
+
+---
+
 ## 错误码
 
 | code | HTTP | 说明 |
@@ -564,5 +683,6 @@ DELETE /subtasks/{subtaskId}/
 | `INVALID_OPERATION` | 422 | 操作不适用于该任务类型（如对 block 执行延期） |
 | `ALREADY_COMPLETED` | 400 | 任务已完成，不可重复操作 |
 | `ALREADY_CANCELLED` | 400 | 任务已取消，不可重复操作 |
+| `IMPORT_ERROR` | 400 | 导入数据格式/字段不合法，或违反 DB 约束 |
 | —  | 401 | Token 无效或已过期，需重新登录 |
 | —  | 404 | 任务/标签/子任务不存在，或无权访问 |

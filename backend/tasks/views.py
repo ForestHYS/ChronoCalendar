@@ -20,12 +20,17 @@ views.py
     POST   /tasks/{id}/snooze/        TaskViewSet.snooze
     POST   /tasks/{id}/postpone/      TaskViewSet.postpone
     POST   /tasks/{id}/subtasks/      TaskViewSet.add_subtask
+    GET    /tasks/export/             TaskViewSet.export
+    POST   /tasks/import/             TaskViewSet.import_data
 
   子任务
     PATCH  /subtasks/{id}/            SubTaskDetailView.patch
     DELETE /subtasks/{id}/            SubTaskDetailView.delete
 """
 
+import uuid
+
+from django.db import IntegrityError, transaction
 from django.db.models import OuterRef, Q, Subquery, Sum
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_datetime
@@ -37,7 +42,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ViewSet
 
-from .models import FocusSession, SubTask, Tag, Task
+from .models import FocusSession, SubTask, Tag, Task, TaskBlock, TaskDDL, TaskTodo
 from .serializers import SubTaskSerializer, TagSerializer, TaskSerializer
 
 
@@ -67,6 +72,343 @@ def _task_qs(user):
         .select_related("block_detail", "ddl_detail", "todo_detail")
         .prefetch_related("tags", "subtasks")
     )
+
+
+# ---------------------------------------------------------------------------
+# 导入 / 导出
+# ---------------------------------------------------------------------------
+
+EXPORT_VERSION = 1
+
+
+def _iso(dt):
+    return dt.isoformat() if dt else None
+
+
+def _build_export(user) -> dict:
+    """构建当前用户的全量任务导出 JSON。"""
+    tags = list(Tag.objects.filter(user=user))
+    tasks = list(_task_qs(user).prefetch_related("focus_sessions"))
+
+    tag_items = [
+        {"id": str(t.id), "name": t.name, "color": t.color}
+        for t in tags
+    ]
+
+    task_items = []
+    for t in tasks:
+        item = {
+            "id": str(t.id),
+            "type": t.type,
+            "title": t.title,
+            "description": t.description,
+            "status": t.status,
+            "remind_at": _iso(t.remind_at),
+            "created_at": _iso(t.created_at),
+            "completed_at": _iso(t.completed_at),
+            "cancelled_at": _iso(t.cancelled_at),
+            "tag_ids": [str(tag.id) for tag in t.tags.all()],
+            "focus_sessions": [
+                {
+                    "id": str(fs.id),
+                    "status": fs.status,
+                    "started_at": _iso(fs.started_at),
+                    "ended_at": _iso(fs.ended_at),
+                    "planned_seconds": fs.planned_seconds,
+                    "actual_seconds": fs.actual_seconds,
+                    "stop_reason": fs.stop_reason or None,
+                    "noise_id": fs.noise_id,
+                }
+                for fs in t.focus_sessions.all()
+            ],
+        }
+        if t.type == Task.Type.BLOCK and hasattr(t, "block_detail"):
+            item["block"] = {
+                "start_at": _iso(t.block_detail.start_at),
+                "end_at": _iso(t.block_detail.end_at),
+            }
+        elif t.type == Task.Type.DDL and hasattr(t, "ddl_detail"):
+            item["ddl"] = {"due_at": _iso(t.ddl_detail.due_at)}
+        elif t.type == Task.Type.TODO and hasattr(t, "todo_detail"):
+            item["todo"] = {
+                "due_at": _iso(t.todo_detail.due_at),
+                "expected_minutes": t.todo_detail.expected_minutes,
+            }
+            item["subtasks"] = [
+                {
+                    "id": str(s.id),
+                    "title": s.title,
+                    "done": s.done,
+                    "order": s.order,
+                    "done_at": _iso(s.done_at),
+                    "created_at": _iso(s.created_at),
+                }
+                for s in t.subtasks.all()
+            ]
+        task_items.append(item)
+
+    return {
+        "version": EXPORT_VERSION,
+        "exported_at": _iso(timezone.now()),
+        "tags": tag_items,
+        "tasks": task_items,
+    }
+
+
+def _parse_iso(value, *, field=""):
+    if value is None or value == "":
+        return None
+    dt = parse_datetime(value)
+    if dt is None:
+        raise ValueError(f"{field} 不是有效的 ISO 8601 时间: {value!r}")
+    return dt
+
+
+def _coerce_uuid(value, *, field=""):
+    try:
+        return uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        raise ValueError(f"{field} 不是有效的 UUID: {value!r}")
+
+
+def _ensure_dict(value, *, field):
+    """空 → {}；非 dict → ValueError；避免后续 .get() 抛 AttributeError 漏到 500。"""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} 必须为对象")
+    return value
+
+
+def _apply_import(user, data, mode: str) -> dict:
+    """
+    将导出 JSON 应用到当前用户。
+    任何不通过的校验都抛 ValueError，由调用方转为 err()。
+    """
+    if mode not in ("merge", "duplicate"):
+        raise ValueError(f"mode 必须为 merge 或 duplicate，收到 {mode!r}")
+    if not isinstance(data, dict):
+        raise ValueError("导入数据格式错误：顶层必须为对象")
+    if data.get("version") != EXPORT_VERSION:
+        raise ValueError(
+            f"不支持的导出版本: {data.get('version')!r}（当前期望 {EXPORT_VERSION}）"
+        )
+    raw_tags = data.get("tags") or []
+    raw_tasks = data.get("tasks") or []
+    if not isinstance(raw_tags, list) or not isinstance(raw_tasks, list):
+        raise ValueError("tags 与 tasks 必须为数组")
+
+    summary = {
+        "tags": {"created": 0, "reused": 0},
+        "tasks": {"created": 0, "updated": 0},
+    }
+
+    with transaction.atomic():
+        # ---- 标签：按 name 在当前用户下查或建 ----
+        tag_id_map: dict = {}
+        for raw in raw_tags:
+            if not isinstance(raw, dict):
+                raise ValueError("tags 元素必须是对象")
+            name = (raw.get("name") or "").strip()
+            if not name:
+                raise ValueError("标签缺少 name 字段")
+            old_id = raw.get("id")
+            if not old_id:
+                raise ValueError(f"标签 {name!r} 缺少 id 字段")
+            color = (raw.get("color") or "#6366F1").strip() or "#6366F1"
+
+            existing = Tag.objects.filter(user=user, name=name).first()
+            if existing:
+                tag_id_map[str(old_id)] = existing.id
+                summary["tags"]["reused"] += 1
+            else:
+                created = Tag.objects.create(user=user, name=name, color=color)
+                tag_id_map[str(old_id)] = created.id
+                summary["tags"]["created"] += 1
+
+        # ---- 任务 ----
+        seen_task_ids = set()
+        for raw in raw_tasks:
+            if not isinstance(raw, dict):
+                raise ValueError("tasks 元素必须是对象")
+            old_id = raw.get("id")
+            if not old_id:
+                raise ValueError("任务缺少 id 字段")
+            if old_id in seen_task_ids:
+                raise ValueError(f"任务 id 在导入文件中重复: {old_id}")
+            seen_task_ids.add(old_id)
+
+            t_type = raw.get("type")
+            if t_type not in (Task.Type.BLOCK, Task.Type.DDL, Task.Type.TODO):
+                raise ValueError(f"任务 {old_id} 的 type 无效: {t_type!r}")
+
+            t_status = raw.get("status") or Task.Status.ACTIVE
+            if t_status not in (
+                Task.Status.ACTIVE,
+                Task.Status.COMPLETED,
+                Task.Status.CANCELLED,
+            ):
+                raise ValueError(f"任务 {old_id} 的 status 无效: {t_status!r}")
+
+            title = (raw.get("title") or "").strip()
+            if not title:
+                raise ValueError(f"任务 {old_id} 的 title 不能为空")
+
+            common = dict(
+                type=t_type,
+                title=title,
+                description=raw.get("description") or "",
+                status=t_status,
+                remind_at=_parse_iso(raw.get("remind_at"), field="remind_at"),
+                completed_at=_parse_iso(raw.get("completed_at"), field="completed_at"),
+                cancelled_at=_parse_iso(raw.get("cancelled_at"), field="cancelled_at"),
+            )
+
+            existing_task = None
+            if mode == "merge":
+                old_uuid = _coerce_uuid(old_id, field="task id")
+                existing_task = Task.objects.filter(user=user, id=old_uuid).first()
+
+            if existing_task:
+                if existing_task.type != t_type:
+                    raise ValueError(
+                        f"任务 {old_id} 的 type 与库内记录不一致 "
+                        f"(库: {existing_task.type}, 文件: {t_type})"
+                    )
+                # 清理旧子结构与子表，下面统一重建
+                existing_task.tags.clear()
+                existing_task.subtasks.all().delete()
+                existing_task.focus_sessions.all().delete()
+                TaskBlock.objects.filter(task=existing_task).delete()
+                TaskDDL.objects.filter(task=existing_task).delete()
+                TaskTodo.objects.filter(task=existing_task).delete()
+                for k, v in common.items():
+                    setattr(existing_task, k, v)
+                existing_task.save()
+                task = existing_task
+                summary["tasks"]["updated"] += 1
+            else:
+                new_id = (
+                    _coerce_uuid(old_id, field="task id")
+                    if mode == "merge"
+                    else uuid.uuid4()
+                )
+                task = Task.objects.create(user=user, id=new_id, **common)
+                summary["tasks"]["created"] += 1
+
+            # auto_now_add 会重置 created_at，需要单独 update
+            created_at = _parse_iso(raw.get("created_at"), field="created_at")
+            if created_at:
+                Task.objects.filter(pk=task.pk).update(created_at=created_at)
+
+            # 类型子表
+            if t_type == Task.Type.BLOCK:
+                blk = _ensure_dict(raw.get("block"), field=f"任务 {old_id} 的 block")
+                start_at = _parse_iso(blk.get("start_at"), field="block.start_at")
+                end_at = _parse_iso(blk.get("end_at"), field="block.end_at")
+                if not start_at or not end_at:
+                    raise ValueError(f"任务 {old_id} (block) 缺少 start_at/end_at")
+                if end_at <= start_at:
+                    raise ValueError(f"任务 {old_id} (block) end_at 必须晚于 start_at")
+                TaskBlock.objects.create(task=task, start_at=start_at, end_at=end_at)
+            elif t_type == Task.Type.DDL:
+                d = _ensure_dict(raw.get("ddl"), field=f"任务 {old_id} 的 ddl")
+                due_at = _parse_iso(d.get("due_at"), field="ddl.due_at")
+                if not due_at:
+                    raise ValueError(f"任务 {old_id} (ddl) 缺少 due_at")
+                TaskDDL.objects.create(task=task, due_at=due_at)
+            elif t_type == Task.Type.TODO:
+                td = _ensure_dict(raw.get("todo"), field=f"任务 {old_id} 的 todo")
+                em = td.get("expected_minutes")
+                TaskTodo.objects.create(
+                    task=task,
+                    due_at=_parse_iso(td.get("due_at"), field="todo.due_at"),
+                    expected_minutes=int(em) if em is not None else None,
+                )
+                for sub in raw.get("subtasks") or []:
+                    if not isinstance(sub, dict):
+                        raise ValueError(f"任务 {old_id} 的 subtasks 元素必须是对象")
+                    sub_title = (sub.get("title") or "").strip()
+                    if not sub_title:
+                        raise ValueError(f"任务 {old_id} 的子任务 title 不能为空")
+                    sub_id = (
+                        _coerce_uuid(sub.get("id"), field="subtask id")
+                        if mode == "merge" and sub.get("id")
+                        else uuid.uuid4()
+                    )
+                    new_sub = SubTask.objects.create(
+                        id=sub_id,
+                        task=task,
+                        title=sub_title,
+                        done=bool(sub.get("done")),
+                        order=max(1, int(sub.get("order") or 1)),
+                        done_at=_parse_iso(sub.get("done_at"), field="subtask.done_at"),
+                    )
+                    sub_created = _parse_iso(
+                        sub.get("created_at"), field="subtask.created_at"
+                    )
+                    if sub_created:
+                        SubTask.objects.filter(pk=new_sub.pk).update(
+                            created_at=sub_created
+                        )
+
+            # 标签关联
+            for old_tag_id in raw.get("tag_ids") or []:
+                key = str(old_tag_id)
+                tag_pk = tag_id_map.get(key)
+                if not tag_pk:
+                    raise ValueError(
+                        f"任务 {old_id} 引用未声明的 tag_id: {old_tag_id}"
+                    )
+                task.tags.add(tag_pk)
+
+            # 专注会话
+            valid_fs_status = {
+                FocusSession.Status.RUNNING,
+                FocusSession.Status.STOPPED,
+            }
+            for fs in raw.get("focus_sessions") or []:
+                if not isinstance(fs, dict):
+                    raise ValueError(
+                        f"任务 {old_id} 的 focus_sessions 元素必须是对象"
+                    )
+                fs_status = fs.get("status") or FocusSession.Status.STOPPED
+                if fs_status not in valid_fs_status:
+                    raise ValueError(
+                        f"任务 {old_id} 的 focus_session status 无效: {fs_status!r}"
+                    )
+                fs_id = (
+                    _coerce_uuid(fs.get("id"), field="focus_session id")
+                    if mode == "merge" and fs.get("id")
+                    else uuid.uuid4()
+                )
+                planned = fs.get("planned_seconds")
+                if planned is None:
+                    raise ValueError(
+                        f"任务 {old_id} 的 focus_session 缺少 planned_seconds"
+                    )
+                new_fs = FocusSession.objects.create(
+                    id=fs_id,
+                    user=user,
+                    task=task,
+                    status=fs_status,
+                    planned_seconds=int(planned),
+                    actual_seconds=fs.get("actual_seconds"),
+                    ended_at=_parse_iso(
+                        fs.get("ended_at"), field="focus_session.ended_at"
+                    ),
+                    stop_reason=fs.get("stop_reason") or None,
+                    noise_id=fs.get("noise_id") or "",
+                )
+                started_at = _parse_iso(
+                    fs.get("started_at"), field="focus_session.started_at"
+                )
+                if started_at:
+                    FocusSession.objects.filter(pk=new_fs.pk).update(
+                        started_at=started_at
+                    )
+
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +732,30 @@ class TaskViewSet(ViewSet):
         task.last_activity_at = timezone.now()
         task.save()
         return ok(SubTaskSerializer(subtask).data, status.HTTP_201_CREATED)
+
+    # ------------------------------------------------------------------ #
+    # 导入 / 导出
+    # ------------------------------------------------------------------ #
+
+    @action(detail=False, methods=["get"], url_path="export")
+    def export(self, request):
+        """导出当前用户的全量任务数据。"""
+        return ok(_build_export(request.user))
+
+    @action(detail=False, methods=["post"], url_path="import")
+    def import_data(self, request):
+        """
+        导入任务数据。?mode=merge|duplicate（默认 merge）。
+        请求体即 _build_export 返回的对象（不带 {"data": ...} 包装）。
+        """
+        mode = (request.query_params.get("mode") or "merge").lower()
+        try:
+            summary = _apply_import(request.user, request.data, mode)
+        except ValueError as e:
+            return err("IMPORT_ERROR", str(e))
+        except IntegrityError as e:
+            return err("IMPORT_ERROR", f"数据库完整性错误: {e}")
+        return ok({"mode": mode, **summary})
 
 
 # ---------------------------------------------------------------------------
