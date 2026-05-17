@@ -171,6 +171,15 @@ def _coerce_uuid(value, *, field=""):
         raise ValueError(f"{field} 不是有效的 UUID: {value!r}")
 
 
+def _ensure_dict(value, *, field):
+    """空 → {}；非 dict → ValueError；避免后续 .get() 抛 AttributeError 漏到 500。"""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field} 必须为对象")
+    return value
+
+
 def _apply_import(user, data, mode: str) -> dict:
     """
     将导出 JSON 应用到当前用户。
@@ -294,7 +303,7 @@ def _apply_import(user, data, mode: str) -> dict:
 
             # 类型子表
             if t_type == Task.Type.BLOCK:
-                blk = raw.get("block") or {}
+                blk = _ensure_dict(raw.get("block"), field=f"任务 {old_id} 的 block")
                 start_at = _parse_iso(blk.get("start_at"), field="block.start_at")
                 end_at = _parse_iso(blk.get("end_at"), field="block.end_at")
                 if not start_at or not end_at:
@@ -303,13 +312,13 @@ def _apply_import(user, data, mode: str) -> dict:
                     raise ValueError(f"任务 {old_id} (block) end_at 必须晚于 start_at")
                 TaskBlock.objects.create(task=task, start_at=start_at, end_at=end_at)
             elif t_type == Task.Type.DDL:
-                d = raw.get("ddl") or {}
+                d = _ensure_dict(raw.get("ddl"), field=f"任务 {old_id} 的 ddl")
                 due_at = _parse_iso(d.get("due_at"), field="ddl.due_at")
                 if not due_at:
                     raise ValueError(f"任务 {old_id} (ddl) 缺少 due_at")
                 TaskDDL.objects.create(task=task, due_at=due_at)
             elif t_type == Task.Type.TODO:
-                td = raw.get("todo") or {}
+                td = _ensure_dict(raw.get("todo"), field=f"任务 {old_id} 的 todo")
                 em = td.get("expected_minutes")
                 TaskTodo.objects.create(
                     task=task,
