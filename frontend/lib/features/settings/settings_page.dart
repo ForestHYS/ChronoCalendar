@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/ui/app_error_dialog.dart';
+import '../../core/ui/app_message_dialog.dart';
 import '../../data/providers.dart';
 import '../../shared/widgets/app_card.dart';
 
@@ -12,6 +13,7 @@ class SettingsPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(authNotifierProvider);
     final authRepo = ref.watch(authRepositoryProvider);
     final taskRepo = ref.watch(taskRepositoryProvider);
     final email = authRepo.savedEmail ?? '未登录';
@@ -141,7 +143,6 @@ class SettingsPage extends ConsumerWidget {
   static Future<void> _showEditNickname(BuildContext context, WidgetRef ref) async {
     final repo = ref.read(authRepositoryProvider);
     final c = TextEditingController(text: repo.nickname);
-    final nav = Navigator.of(context);
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -150,15 +151,19 @@ class SettingsPage extends ConsumerWidget {
           content: TextField(
             controller: c,
             autofocus: true,
+            maxLength: 150,
             decoration: const InputDecoration(labelText: '昵称'),
           ),
           actions: [
-            TextButton(onPressed: () => dialogContext.pop(), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('取消')),
             OutlinedButton(
               onPressed: () async {
                 try {
-                  await ref.read(authRepositoryProvider).updateNickname(c.text);
-                  nav.pop();
+                  await ref.read(authNotifierProvider).updateNickname(c.text);
+                  if (!dialogContext.mounted) return;
+                  Navigator.pop(dialogContext);
+                  if (!context.mounted) return;
+                  await showAppMessageDialog(context, title: '已保存', message: '昵称已更新');
                 } catch (e) {
                   if (!context.mounted) return;
                   await showAppErrorDialog(context, title: '保存失败', error: e);
@@ -170,13 +175,12 @@ class SettingsPage extends ConsumerWidget {
         );
       },
     );
+    c.dispose();
   }
 
   static Future<void> _showChangePassword(BuildContext context, WidgetRef ref) async {
     final currentC = TextEditingController();
     final nextC = TextEditingController();
-    final messenger = ScaffoldMessenger.of(context);
-    final nav = Navigator.of(context);
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
@@ -189,26 +193,30 @@ class SettingsPage extends ConsumerWidget {
                 controller: currentC,
                 decoration: const InputDecoration(labelText: '当前密码'),
                 obscureText: true,
+                autofillHints: const [],
               ),
               const SizedBox(height: 10),
               TextField(
                 controller: nextC,
                 decoration: const InputDecoration(labelText: '新密码（至少 6 位）'),
                 obscureText: true,
+                autofillHints: const [],
               ),
             ],
           ),
           actions: [
-            TextButton(onPressed: () => dialogContext.pop(), child: const Text('取消')),
+            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('取消')),
             OutlinedButton(
               onPressed: () async {
                 try {
-                  await ref.read(authRepositoryProvider).changePassword(
+                  await ref.read(authNotifierProvider).changePassword(
                         current: currentC.text,
                         next: nextC.text,
                       );
-                  nav.pop();
-                  messenger.showSnackBar(const SnackBar(content: Text('密码已更新')));
+                  if (!dialogContext.mounted) return;
+                  Navigator.pop(dialogContext);
+                  if (!context.mounted) return;
+                  await showAppMessageDialog(context, title: '已保存', message: '密码已更新，请使用新密码登录');
                 } catch (e) {
                   if (!context.mounted) return;
                   await showAppErrorDialog(context, title: '修改失败', error: e);
@@ -220,10 +228,12 @@ class SettingsPage extends ConsumerWidget {
         );
       },
     );
+    currentC.dispose();
+    nextC.dispose();
   }
 }
 
-class _AchievementSection extends StatefulWidget {
+class _AchievementSection extends StatelessWidget {
   const _AchievementSection({
     required this.completedTotal,
     required this.focusSeconds,
@@ -232,33 +242,26 @@ class _AchievementSection extends StatefulWidget {
   final int completedTotal;
   final int focusSeconds;
 
-  @override
-  State<_AchievementSection> createState() => _AchievementSectionState();
-}
-
-class _AchievementSectionState extends State<_AchievementSection> with TickerProviderStateMixin {
-  bool _expanded = false;
-
   List<_Achievement> _items() {
-    final focusHours = widget.focusSeconds / 3600.0;
+    final focusHours = focusSeconds / 3600.0;
     return <_Achievement>[
       _Achievement(
         title: '新手上路',
         subtitle: '完成 1 个任务',
         icon: Icons.emoji_events_outlined,
-        unlocked: widget.completedTotal >= 1,
+        unlocked: completedTotal >= 1,
       ),
       _Achievement(
         title: '坚持不懈',
         subtitle: '完成 10 个任务',
         icon: Icons.military_tech_outlined,
-        unlocked: widget.completedTotal >= 10,
+        unlocked: completedTotal >= 10,
       ),
       _Achievement(
         title: '效率达人',
         subtitle: '完成 30 个任务',
         icon: Icons.workspace_premium_outlined,
-        unlocked: widget.completedTotal >= 30,
+        unlocked: completedTotal >= 30,
       ),
       _Achievement(
         title: '专注 1 小时',
@@ -281,58 +284,80 @@ class _AchievementSectionState extends State<_AchievementSection> with TickerPro
     ];
   }
 
+  void _openAll(BuildContext context) {
+    final items = _items();
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  '全部成就',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                ...items.map((a) => Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: _AchievementCard(a: a),
+                    )),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final items = _items();
-    final visible = _expanded ? items : items.take(4).toList();
+    final visible = items.take(4).toList();
 
     return AppCard(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          InkWell(
-            onTap: () => setState(() => _expanded = !_expanded),
-            borderRadius: BorderRadius.circular(12),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  const Text(
-                    '成就勋章',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.onSurface),
-                  ),
-                  const Spacer(),
-                  AnimatedRotation(
-                    turns: _expanded ? 0.5 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: const Icon(Icons.expand_more_rounded, color: AppColors.onSurfaceVariant),
-                  ),
-                ],
+          Row(
+            children: [
+              const Text(
+                '成就勋章',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.onSurface),
               ),
-            ),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.expand_more_rounded, color: AppColors.onSurfaceVariant),
+                tooltip: '查看全部',
+                onPressed: () => _openAll(context),
+              ),
+            ],
           ),
           const SizedBox(height: 10),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 280),
-            curve: Curves.easeInOutCubic,
-            child: LayoutBuilder(
-              builder: (context, c) {
-                final w = c.maxWidth;
-                final itemW = (w - 10) / 2;
-                return Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    for (final a in visible)
-                      SizedBox(
-                        width: itemW,
-                        child: _AchievementCard(a: a),
-                      ),
-                  ],
-                );
-              },
-            ),
+          LayoutBuilder(
+            builder: (context, c) {
+              final w = c.maxWidth;
+              final itemW = (w - 10) / 2;
+              return Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  for (final a in visible)
+                    SizedBox(
+                      width: itemW,
+                      child: _AchievementCard(a: a),
+                    ),
+                ],
+              );
+            },
           ),
         ],
       ),

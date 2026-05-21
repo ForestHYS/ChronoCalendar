@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/ui/app_message_dialog.dart';
 import '../../data/providers.dart';
 
 class PomodoroPage extends ConsumerStatefulWidget {
@@ -113,9 +114,11 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
   void _onFocusComplete() {
     _hapticBurst();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('专注完成，进入休息')),
-      );
+      unawaited(showAppMessageDialog(
+        context,
+        title: '专注完成',
+        message: '进入休息阶段',
+      ));
     }
     _ticker?.cancel();
     setState(() {
@@ -130,9 +133,11 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
   void _onRestComplete() {
     _hapticBurst();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('休息结束，开始下一轮专注')),
-      );
+      unawaited(showAppMessageDialog(
+        context,
+        title: '休息结束',
+        message: '开始下一轮专注',
+      ));
     }
     _ticker?.cancel();
     setState(() {

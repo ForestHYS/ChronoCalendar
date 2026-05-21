@@ -7,6 +7,8 @@ import '../../core/ui/app_error_dialog.dart';
 import '../../data/providers.dart';
 import '../../domain/models/tag.dart';
 import '../../shared/widgets/app_card.dart';
+import '../../shared/widgets/color_picker_row.dart';
+import '../../shared/widgets/tag_color_palette.dart';
 
 class TagManagePage extends ConsumerWidget {
   const TagManagePage({super.key});
@@ -63,7 +65,7 @@ class TagManagePage extends ConsumerWidget {
 
   static Future<void> _showAdd(BuildContext context, WidgetRef ref) async {
     final nameC = TextEditingController();
-    Color color = AppColors.chartTagColors[0];
+    Color color = TagColorPalette.colors.first;
 
     await showDialog<void>(
       context: context,
@@ -76,10 +78,11 @@ class TagManagePage extends ConsumerWidget {
               TextField(
                 controller: nameC,
                 autofocus: true,
-                decoration: const InputDecoration(labelText: '名称'),
+                maxLength: TagColorPalette.maxNameLength,
+                decoration: const InputDecoration(labelText: '名称（最多 20 字）'),
               ),
               const SizedBox(height: 10),
-              _ColorPickerRow(
+              ColorPickerRow(
                 initial: color,
                 onChanged: (c) => color = c,
               ),
@@ -116,7 +119,8 @@ class TagManagePage extends ConsumerWidget {
           content: TextField(
             controller: c,
             autofocus: true,
-            decoration: const InputDecoration(labelText: '名称'),
+            maxLength: TagColorPalette.maxNameLength,
+            decoration: const InputDecoration(labelText: '名称（最多 20 字）'),
           ),
           actions: [
             TextButton(onPressed: () => context.pop(), child: const Text('取消')),
@@ -146,7 +150,7 @@ class TagManagePage extends ConsumerWidget {
       builder: (context) {
         return AlertDialog(
           title: const Text('修改颜色'),
-          content: _ColorPickerRow(
+          content: ColorPickerRow(
             initial: color,
             onChanged: (c) => color = c,
           ),
@@ -229,6 +233,8 @@ class _TagRow extends StatelessWidget {
           Expanded(
             child: Text(
               tag.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.onSurface),
             ),
           ),
@@ -252,45 +258,3 @@ class _TagRow extends StatelessWidget {
     );
   }
 }
-
-class _ColorPickerRow extends StatelessWidget {
-  const _ColorPickerRow({required this.initial, required this.onChanged});
-
-  final Color initial;
-  final ValueChanged<Color> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = <Color>[
-      ...AppColors.chartTagColors,
-      AppColors.primary,
-      AppColors.success,
-      AppColors.warning,
-      AppColors.error,
-    ];
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: [
-        for (final c in colors)
-          InkWell(
-            onTap: () => onChanged(c),
-            borderRadius: BorderRadius.circular(999),
-            child: Container(
-              width: 26,
-              height: 26,
-              decoration: BoxDecoration(
-                color: c,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: c == initial ? AppColors.onSurface : Colors.transparent,
-                  width: 2,
-                ),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-

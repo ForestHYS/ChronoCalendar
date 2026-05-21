@@ -26,6 +26,7 @@ views.py
     DELETE /subtasks/{id}/            SubTaskDetailView.delete
 """
 
+from django.db import IntegrityError
 from django.db.models import OuterRef, Q, Subquery, Sum
 from django.shortcuts import get_object_or_404
 from django.utils.dateparse import parse_datetime
@@ -84,7 +85,10 @@ class TagViewSet(ViewSet):
         s = TagSerializer(data=request.data)
         if not s.is_valid():
             return err("VALIDATION_ERROR", "输入数据无效", s.errors)
-        s.save(user=request.user)
+        try:
+            s.save(user=request.user)
+        except IntegrityError:
+            return err("DUPLICATE_TAG", "已存在同名标签", http_status=status.HTTP_409_CONFLICT)
         return ok(s.data, status.HTTP_201_CREATED)
 
     def partial_update(self, request, pk=None):
@@ -92,7 +96,10 @@ class TagViewSet(ViewSet):
         s = TagSerializer(tag, data=request.data, partial=True)
         if not s.is_valid():
             return err("VALIDATION_ERROR", "输入数据无效", s.errors)
-        s.save()
+        try:
+            s.save()
+        except IntegrityError:
+            return err("DUPLICATE_TAG", "已存在同名标签", http_status=status.HTTP_409_CONFLICT)
         return ok(s.data)
 
     def destroy(self, request, pk=None):

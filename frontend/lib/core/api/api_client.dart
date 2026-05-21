@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,6 +14,8 @@ class ApiClient {
   ApiClient(this._prefs);
 
   final SharedPreferences _prefs;
+
+  static const Duration _timeout = Duration(seconds: 20);
 
   Uri _uri(String path) {
     final p = path.startsWith('/') ? path.substring(1) : path;
@@ -81,21 +85,34 @@ class ApiClient {
       final uri = _uri(path);
       final encoded = body != null ? jsonEncode(body) : null;
       final headers = _headers(withAuth: auth);
-      switch (method.toUpperCase()) {
-        case 'GET':
-          return http.get(uri, headers: headers);
-        case 'POST':
-          return http.post(uri, headers: headers, body: encoded);
-        case 'PATCH':
-          return http.patch(uri, headers: headers, body: encoded);
-        case 'DELETE':
-          return http.delete(uri, headers: headers);
-        default:
-          throw ApiException('不支持的 HTTP 方法: $method');
+      try {
+        switch (method.toUpperCase()) {
+          case 'GET':
+            return await http.get(uri, headers: headers).timeout(_timeout);
+          case 'POST':
+            return await http.post(uri, headers: headers, body: encoded).timeout(_timeout);
+          case 'PATCH':
+            return await http.patch(uri, headers: headers, body: encoded).timeout(_timeout);
+          case 'DELETE':
+            return await http.delete(uri, headers: headers).timeout(_timeout);
+          default:
+            throw ApiException('不支持的 HTTP 方法: $method');
+        }
+      } on TimeoutException {
+        throw ApiException('连接超时，请检查网络或确认后端服务已启动');
+      } on SocketException {
+        throw ApiException('无法连接服务器，请检查网络与 API 地址');
+      } on http.ClientException {
+        throw ApiException('网络请求失败，请稍后重试');
       }
     }
 
-    var resp = await send();
+    http.Response resp;
+    try {
+      resp = await send();
+    } on ApiException {
+      rethrow;
+    }
     if (auth && resp.statusCode == 401) {
       final ok = await _tryRefresh();
       if (ok) resp = await send();

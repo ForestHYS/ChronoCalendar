@@ -159,6 +159,68 @@ class RefreshView(APIView):
             )
 
 
+class ProfileView(APIView):
+    """
+    PATCH /auth/me/
+    Body: { "name": "昵称" }
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        name = (request.data.get("name") or "").strip()
+        if not name:
+            return Response(
+                {"error": {"code": "VALIDATION_ERROR", "message": "昵称不能为空"}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(name) > 150:
+            return Response(
+                {"error": {"code": "VALIDATION_ERROR", "message": "昵称过长（最多 150 字）"}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = request.user
+        parts = name.split(" ", 1)
+        user.first_name = parts[0]
+        user.last_name = parts[1] if len(parts) > 1 else ""
+        user.save(update_fields=["first_name", "last_name"])
+        return Response(
+            {"data": {"id": str(user.id), "name": user.get_full_name() or user.username}}
+        )
+
+
+class ChangePasswordView(APIView):
+    """
+    POST /auth/change-password/
+    Body: { "current_password": "...", "new_password": "..." }
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        current = request.data.get("current_password") or ""
+        new_pw = request.data.get("new_password") or ""
+        if not current or not new_pw:
+            return Response(
+                {"error": {"code": "VALIDATION_ERROR", "message": "请填写当前密码与新密码"}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if len(new_pw) < 6:
+            return Response(
+                {"error": {"code": "VALIDATION_ERROR", "message": "新密码至少 6 位"}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user = request.user
+        if not user.check_password(current):
+            return Response(
+                {"error": {"code": "INVALID_CREDENTIALS", "message": "当前密码不正确"}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        user.set_password(new_pw)
+        user.save(update_fields=["password"])
+        return Response({"data": {"ok": True}})
+
+
 class LogoutView(APIView):
     """
     POST /auth/logout/

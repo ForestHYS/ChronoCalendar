@@ -87,6 +87,16 @@ class AuthNotifier extends ChangeNotifier {
     _sync();
     notifyListeners();
   }
+
+  Future<void> updateNickname(String nickname) async {
+    await _repo.updateNickname(nickname);
+    notifyListeners();
+  }
+
+  Future<void> changePassword({required String current, required String next}) async {
+    await _repo.changePassword(current: current, next: next);
+    notifyListeners();
+  }
 }
 
 final authNotifierProvider = ChangeNotifierProvider<AuthNotifier>((ref) {

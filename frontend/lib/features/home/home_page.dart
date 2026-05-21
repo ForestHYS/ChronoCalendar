@@ -219,28 +219,32 @@ class HomePage extends ConsumerWidget {
                               ),
                               const SizedBox(width: 6),
                               if (topTag != null)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 3,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.85),
-                                    borderRadius: BorderRadius.circular(
-                                      AppRadii.chip,
+                                Flexible(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 3,
                                     ),
-                                    border: Border.all(
-                                      color: AppColors.outline.withValues(
-                                        alpha: 0.6,
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.85),
+                                      borderRadius: BorderRadius.circular(
+                                        AppRadii.chip,
+                                      ),
+                                      border: Border.all(
+                                        color: AppColors.outline.withValues(
+                                          alpha: 0.6,
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  child: Text(
-                                    topTag.name,
-                                    style: const TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: Color(0xFF1E40AF),
+                                    child: Text(
+                                      topTag.name,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF1E40AF),
+                                      ),
                                     ),
                                   ),
                                 )
@@ -420,7 +424,7 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
     final t =
         ref.watch(taskRepositoryProvider).taskById(widget.task.id) ??
         widget.task;
-    final allDone = t.subtasks.isNotEmpty && t.subtasks.every((s) => s.done);
+    final canComplete = t.subtasks.isEmpty || t.subtasks.every((s) => s.done);
     final tags = _tagsForTask(widget.repo, t);
     final tileTheme = Theme.of(context).copyWith(
       dividerColor: Colors.transparent,
@@ -583,7 +587,7 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
                       ),
                     ),
                   ),
-                  if (allDone) ...[
+                  if (canComplete) ...[
                     const SizedBox(width: 8),
                     OutlinedButton(
                       onPressed: () {

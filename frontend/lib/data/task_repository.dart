@@ -83,6 +83,9 @@ class TaskRepository extends ChangeNotifier {
   Future<void> addTag({required String name, required Color color}) async {
     final n = name.trim();
     if (n.isEmpty) return;
+    if (n.length > 20) {
+      throw ArgumentError('标签名称不能超过 20 个字符');
+    }
     final data = await _api.request(
       'POST',
       'tags/',
@@ -264,7 +267,58 @@ class TaskRepository extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 新建服务端任务（默认 block），返回任务 id。
+  static bool isLocalSubtaskId(String id) => id.startsWith('local-');
+
+  /// 创建任务并写入本地列表，返回服务端任务。
+  Future<Task> createTask(Task task) async {
+    final body = taskToCreateBody(
+      type: task.type,
+      title: task.title,
+      description: task.description,
+      tagIds: task.tagIds,
+      remindAt: task.remindAt,
+      startAt: task.startAt,
+      endAt: task.endAt,
+      dueAt: task.dueAt,
+      expectedMinutes: task.expectedMinutes,
+      subtasks: task.subtasks,
+    );
+    final data = await _api.request('POST', 'tasks/', body: body, auth: true);
+    if (data is! Map<String, dynamic>) {
+      throw StateError('创建任务失败');
+    }
+    final created = taskFromJson(data);
+    _tasks = [..._tasks, created];
+    notifyListeners();
+    return created;
+  }
+
+  /// 编辑保存时同步 todo 子任务增删改。
+  Future<void> syncTodoSubtasks(String taskId, List<Subtask> baseline, List<Subtask> next) async {
+    final baseById = {for (final s in baseline) s.id: s};
+    final nextIds = next.map((s) => s.id).toSet();
+    for (final b in baseline) {
+      if (!nextIds.contains(b.id) && !isLocalSubtaskId(b.id)) {
+        await removeSubtask(taskId, b.id);
+      }
+    }
+    for (final n in next) {
+      if (isLocalSubtaskId(n.id)) {
+        final added = await addSubtask(taskId, n.title);
+        if (added != null && n.done) {
+          await toggleSubtask(taskId, added.id, true);
+        }
+        continue;
+      }
+      final b = baseById[n.id];
+      if (b == null) continue;
+      if (b.done != n.done) await toggleSubtask(taskId, n.id, n.done);
+      if (b.title != n.title) await updateSubtaskTitle(taskId, n.id, n.title);
+    }
+  }
+
+  /// 新建服务端任务（默认 block），返回任务 id。已弃用：请用 [createTask]。
+  @Deprecated('Use createTask after local-only draft')
   Future<String> createDraftTask(TaskType type) async {
     final now = DateTime.now();
     DateTime? startAt;
@@ -304,7 +358,6 @@ class TaskRepository extends ChangeNotifier {
   /// 删除旧任务并以 [next] 的字段新建为 [next.type]（类型不可 PATCH 时用于切换）。
   Future<String> replaceTaskWithNewType(Task next) async {
     final oldId = next.id;
-    await deleteTask(oldId);
     final body = taskToCreateBody(
       type: next.type,
       title: next.title,
@@ -322,8 +375,11 @@ class TaskRepository extends ChangeNotifier {
       throw StateError('创建任务失败');
     }
     final created = taskFromJson(data);
-    _tasks = [..._tasks, created];
+    _tasks = [..._tasks.where((t) => t.id != oldId), created];
     notifyListeners();
+    try {
+      await _api.request('DELETE', 'tasks/$oldId/', auth: true);
+    } catch (_) {}
     return created.id;
   }
 
@@ -351,9 +407,9 @@ class TaskRepository extends ChangeNotifier {
     }
   }
 
-  Future<void> addSubtask(String taskId, String title) async {
+  Future<Subtask?> addSubtask(String taskId, String title) async {
     final t = taskById(taskId);
-    if (t == null || t.type != TaskType.todo) return;
+    if (t == null || t.type != TaskType.todo) return null;
     final maxOrder = t.subtasks.isEmpty
         ? 0
         : t.subtasks.map((s) => s.order).reduce((a, b) => a > b ? a : b);
@@ -367,7 +423,9 @@ class TaskRepository extends ChangeNotifier {
       final sub = subtaskFromJson(data);
       final nextSubs = [...t.subtasks, sub];
       _replaceTask(t.copyWith(subtasks: nextSubs, lastActivityAt: DateTime.now()));
+      return sub;
     }
+    return null;
   }
 
   Future<void> removeSubtask(String taskId, String subtaskId) async {

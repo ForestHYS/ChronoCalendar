@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
@@ -31,8 +33,24 @@ class _CalendarAppState extends ConsumerState<CalendarApp> {
     return MaterialApp.router(
       title: '日程',
       theme: buildAppTheme(),
+      locale: const Locale('zh', 'CN'),
+      supportedLocales: const [Locale('zh', 'CN'), Locale('en', 'US')],
+      localizationsDelegates: [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       routerConfig: router,
       debugShowCheckedModeBanner: false,
+      builder: (context, child) {
+        final base = Theme.of(context).textTheme;
+        return Theme(
+          data: Theme.of(context).copyWith(
+            textTheme: GoogleFonts.notoSansScTextTheme(base),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
     );
   }
 }

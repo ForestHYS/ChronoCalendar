@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/utils/parse_minutes.dart';
 import '../../data/providers.dart';
 import '../../shared/widgets/app_card.dart';
 
@@ -50,14 +51,14 @@ class _PomodoroSettingsPageState extends ConsumerState<PomodoroSettingsPage> {
         content: TextField(
           controller: c,
           keyboardType: TextInputType.number,
-          decoration: const InputDecoration(hintText: '1–180'),
+          decoration: const InputDecoration(hintText: '1–180（十进制分钟）'),
         ),
         actions: [
           TextButton(onPressed: () => ctx.pop(), child: const Text('取消')),
           OutlinedButton(
             onPressed: () {
-              final m = int.tryParse(c.text.trim()) ?? 25;
-              setState(() => _focusSec = (m.clamp(1, 180) * 60));
+              final m = parseDecimalMinutes(c.text, min: 1, max: 180) ?? 25;
+              setState(() => _focusSec = m * 60);
               ctx.pop();
             },
             child: const Text('确定'),
@@ -78,14 +79,14 @@ class _PomodoroSettingsPageState extends ConsumerState<PomodoroSettingsPage> {
         content: TextField(
           controller: c,
           keyboardType: TextInputType.number,
-          decoration: const InputDecoration(hintText: '1–120'),
+          decoration: const InputDecoration(hintText: '1–120（十进制分钟）'),
         ),
         actions: [
           TextButton(onPressed: () => ctx.pop(), child: const Text('取消')),
           OutlinedButton(
             onPressed: () {
-              final m = int.tryParse(c.text.trim()) ?? 5;
-              setState(() => _restSec = (m.clamp(1, 120) * 60));
+              final m = parseDecimalMinutes(c.text, min: 1, max: 120) ?? 5;
+              setState(() => _restSec = m * 60);
               ctx.pop();
             },
             child: const Text('确定'),
