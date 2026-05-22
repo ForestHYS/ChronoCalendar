@@ -311,7 +311,6 @@ class _UserBubble extends StatelessWidget {
 
 class _AssistantCard extends ConsumerStatefulWidget {
   const _AssistantCard({
-    super.key,
     required this.payload,
     required this.onOpenEditor,
     required this.onFollowUp,
@@ -533,8 +532,9 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                 const SizedBox(height: 10),
                 if (items is List && items.isNotEmpty)
                   ...items.take(8).map((e) {
-                    if (e is! Map<String, dynamic>)
+                    if (e is! Map<String, dynamic>) {
                       return const SizedBox.shrink();
+                    }
                     final title = e['title'] as String? ?? '';
                     final t = e['type'] as String? ?? '';
                     final startAt = e['start_at'] as String?;

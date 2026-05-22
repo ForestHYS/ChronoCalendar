@@ -454,6 +454,36 @@ class TaskRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 导出当前用户的全量任务数据。返回服务端原样 JSON 对象，
+  /// 形如 `{version, exported_at, tags:[...], tasks:[...]}`。
+  Future<Map<String, dynamic>> exportAll() async {
+    final data = await _api.request('GET', 'tasks/export/', auth: true);
+    if (data is! Map<String, dynamic>) {
+      throw StateError('导出响应格式错误');
+    }
+    return data;
+  }
+
+  /// 导入数据。mode 必须为 `merge` 或 `duplicate`；
+  /// 成功后调用 [bootstrap] 刷新本地缓存。
+  /// 返回服务端摘要：`{mode, tags:{created,reused}, tasks:{created,updated}}`。
+  Future<Map<String, dynamic>> importData(
+    Map<String, dynamic> payload, {
+    required String mode,
+  }) async {
+    final data = await _api.request(
+      'POST',
+      'tasks/import/?mode=$mode',
+      body: payload,
+      auth: true,
+    );
+    if (data is! Map<String, dynamic>) {
+      throw StateError('导入响应格式错误');
+    }
+    await bootstrap();
+    return data;
+  }
+
   void _mergeSubtaskFromApi(String taskId, Map<String, dynamic> subJson) {
     final sub = subtaskFromJson(subJson);
     final t = taskById(taskId);

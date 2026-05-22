@@ -1,3 +1,6 @@
+import 'dart:convert';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,6 +8,8 @@ import 'package:go_router/go_router.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/ui/app_error_dialog.dart';
 import '../../core/ui/app_message_dialog.dart';
+import '../../core/utils/desktop_file_writer_stub.dart'
+    if (dart.library.io) '../../core/utils/desktop_file_writer_io.dart';
 import '../../data/providers.dart';
 import '../../shared/widgets/app_card.dart';
 
@@ -113,6 +118,29 @@ class SettingsPage extends ConsumerWidget {
                   title: const Text('番茄钟设置'),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => context.push('/settings/pomodoro'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          AppCard(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.upload_file_outlined),
+                  title: const Text('导出全部数据'),
+                  subtitle: const Text('保存任务、标签、子任务、专注会话到 JSON 文件'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _exportData(context, ref),
+                ),
+                const Divider(height: 1, color: AppColors.outline),
+                ListTile(
+                  leading: const Icon(Icons.file_download_outlined),
+                  title: const Text('导入数据'),
+                  subtitle: const Text('从 JSON 文件还原（merge）或复制（duplicate）'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _importData(context, ref),
                 ),
               ],
             ),
@@ -235,6 +263,108 @@ class _EditNicknameDialogState extends ConsumerState<_EditNicknameDialog> {
               : const Text('保存'),
         ),
       ],
+    );
+  }
+
+  static Future<void> _exportData(BuildContext context, WidgetRef ref) async {
+    final repo = ref.read(taskRepositoryProvider);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final data = await repo.exportAll();
+      final pretty = const JsonEncoder.withIndent('  ').convert(data);
+      final bytes = utf8.encode(pretty);
+      final now = DateTime.now();
+      final stamp =
+          '${now.year}${now.month.toString().padLeft(2, '0')}${now.day.toString().padLeft(2, '0')}'
+          '_'
+          '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}';
+
+      final saved = await FilePicker.saveFile(
+        dialogTitle: '保存导出文件',
+        fileName: 'ChronoCalendar_$stamp.json',
+        bytes: bytes,
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+      );
+      if (saved == null) return; // 用户取消
+      // 桌面端 saveFile 只返回路径，需要手动写入；移动端 / web 由插件内部完成
+      await ensureFileWritten(saved, bytes);
+      messenger.showSnackBar(const SnackBar(content: Text('导出成功')));
+    } catch (e) {
+      if (!context.mounted) return;
+      await showAppErrorDialog(context, title: '导出失败', error: e);
+    }
+  }
+
+  static Future<void> _importData(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final picked = await FilePicker.pickFiles(
+        dialogTitle: '选择导入文件',
+        type: FileType.custom,
+        allowedExtensions: const ['json'],
+        withData: true,
+      );
+      if (picked == null || picked.files.isEmpty) return;
+      final file = picked.files.single;
+      if (file.bytes == null) {
+        throw StateError('无法读取所选文件');
+      }
+      final decoded = jsonDecode(utf8.decode(file.bytes!));
+      if (decoded is! Map<String, dynamic>) {
+        throw StateError('文件不是合法的导出 JSON');
+      }
+
+      if (!context.mounted) return;
+      final mode = await _pickImportMode(context);
+      if (mode == null) return;
+
+      final summary = await ref
+          .read(taskRepositoryProvider)
+          .importData(decoded, mode: mode);
+      final tagsSum = summary['tags'] as Map<String, dynamic>? ?? const {};
+      final tasksSum = summary['tasks'] as Map<String, dynamic>? ?? const {};
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            '导入完成（${summary['mode']}）：'
+            '任务 +${tasksSum['created'] ?? 0} / 更新 ${tasksSum['updated'] ?? 0}，'
+            '标签 +${tagsSum['created'] ?? 0} / 复用 ${tagsSum['reused'] ?? 0}',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      await showAppErrorDialog(context, title: '导入失败', error: e);
+    }
+  }
+
+  static Future<String?> _pickImportMode(BuildContext context) {
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Text('选择导入模式'),
+          content: const Text(
+            'merge：按 UUID 覆盖同 ID 任务（适合还原备份，幂等）\n\n'
+            'duplicate：全部作为新任务导入（适合复制一份）',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('取消'),
+            ),
+            OutlinedButton(
+              onPressed: () => Navigator.of(ctx).pop('duplicate'),
+              child: const Text('duplicate'),
+            ),
+            OutlinedButton(
+              onPressed: () => Navigator.of(ctx).pop('merge'),
+              child: const Text('merge'),
+            ),
+          ],
+        );
+      },
     );
   }
 }
