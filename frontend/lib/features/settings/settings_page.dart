@@ -13,7 +13,7 @@ class SettingsPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    ref.watch(authNotifierProvider);
+    ref.watch(profileRefreshProvider);
     final authRepo = ref.watch(authRepositoryProvider);
     final taskRepo = ref.watch(taskRepositoryProvider);
     final email = authRepo.savedEmail ?? '未登录';
@@ -141,95 +141,188 @@ class SettingsPage extends ConsumerWidget {
   }
 
   static Future<void> _showEditNickname(BuildContext context, WidgetRef ref) async {
-    final repo = ref.read(authRepositoryProvider);
-    final c = TextEditingController(text: repo.nickname);
-    await showDialog<void>(
+    final initial = ref.read(authRepositoryProvider).nickname;
+    final saved = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('修改昵称'),
-          content: TextField(
-            controller: c,
-            autofocus: true,
-            maxLength: 150,
-            decoration: const InputDecoration(labelText: '昵称'),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('取消')),
-            OutlinedButton(
-              onPressed: () async {
-                try {
-                  await ref.read(authNotifierProvider).updateNickname(c.text);
-                  if (!dialogContext.mounted) return;
-                  Navigator.pop(dialogContext);
-                  if (!context.mounted) return;
-                  await showAppMessageDialog(context, title: '已保存', message: '昵称已更新');
-                } catch (e) {
-                  if (!context.mounted) return;
-                  await showAppErrorDialog(context, title: '保存失败', error: e);
-                }
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        );
-      },
+      barrierDismissible: true,
+      builder: (_) => _EditNicknameDialog(initial: initial),
     );
-    c.dispose();
+    if (saved == true && context.mounted) {
+      ref.read(profileRefreshProvider.notifier).state++;
+      await showAppMessageDialog(context, title: '已保存', message: '昵称已更新');
+    }
   }
 
   static Future<void> _showChangePassword(BuildContext context, WidgetRef ref) async {
-    final currentC = TextEditingController();
-    final nextC = TextEditingController();
-    await showDialog<void>(
+    final saved = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('修改密码'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: currentC,
-                decoration: const InputDecoration(labelText: '当前密码'),
-                obscureText: true,
-                autofillHints: const [],
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: nextC,
-                decoration: const InputDecoration(labelText: '新密码（至少 6 位）'),
-                obscureText: true,
-                autofillHints: const [],
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('取消')),
-            OutlinedButton(
-              onPressed: () async {
-                try {
-                  await ref.read(authNotifierProvider).changePassword(
-                        current: currentC.text,
-                        next: nextC.text,
-                      );
-                  if (!dialogContext.mounted) return;
-                  Navigator.pop(dialogContext);
-                  if (!context.mounted) return;
-                  await showAppMessageDialog(context, title: '已保存', message: '密码已更新，请使用新密码登录');
-                } catch (e) {
-                  if (!context.mounted) return;
-                  await showAppErrorDialog(context, title: '修改失败', error: e);
-                }
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        );
-      },
+      barrierDismissible: true,
+      builder: (_) => const _ChangePasswordDialog(),
     );
-    currentC.dispose();
-    nextC.dispose();
+    if (saved == true && context.mounted) {
+      await showAppMessageDialog(
+        context,
+        title: '已保存',
+        message: '密码已更新，请使用新密码登录',
+      );
+    }
+  }
+}
+
+class _EditNicknameDialog extends ConsumerStatefulWidget {
+  const _EditNicknameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  ConsumerState<_EditNicknameDialog> createState() => _EditNicknameDialogState();
+}
+
+class _EditNicknameDialogState extends ConsumerState<_EditNicknameDialog> {
+  late final TextEditingController _c;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(authNotifierProvider).updateNickname(_c.text);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await showAppErrorDialog(context, title: '保存失败', error: e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('修改昵称'),
+      content: TextField(
+        controller: _c,
+        autofocus: true,
+        maxLength: 150,
+        enabled: !_saving,
+        decoration: const InputDecoration(labelText: '昵称'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        OutlinedButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChangePasswordDialog extends ConsumerStatefulWidget {
+  const _ChangePasswordDialog();
+
+  @override
+  ConsumerState<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
+  late final TextEditingController _currentC;
+  late final TextEditingController _nextC;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentC = TextEditingController();
+    _nextC = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _currentC.dispose();
+    _nextC.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(authNotifierProvider).changePassword(
+            current: _currentC.text,
+            next: _nextC.text,
+          );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await showAppErrorDialog(context, title: '修改失败', error: e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('修改密码'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _currentC,
+            decoration: const InputDecoration(labelText: '当前密码'),
+            obscureText: true,
+            autofillHints: const [],
+            enabled: !_saving,
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _nextC,
+            decoration: const InputDecoration(labelText: '新密码（至少 6 位）'),
+            obscureText: true,
+            autofillHints: const [],
+            enabled: !_saving,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        OutlinedButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('保存'),
+        ),
+      ],
+    );
   }
 }
 

@@ -90,14 +90,15 @@ class AuthNotifier extends ChangeNotifier {
 
   Future<void> updateNickname(String nickname) async {
     await _repo.updateNickname(nickname);
-    notifyListeners();
   }
 
   Future<void> changePassword({required String current, required String next}) async {
     await _repo.changePassword(current: current, next: next);
-    notifyListeners();
   }
 }
+
+/// 昵称等资料变更后递增，供设置页刷新展示（不触发 GoRouter 重建）。
+final profileRefreshProvider = StateProvider<int>((ref) => 0);
 
 final authNotifierProvider = ChangeNotifierProvider<AuthNotifier>((ref) {
   return AuthNotifier(

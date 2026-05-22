@@ -19,8 +19,7 @@ import '../../features/task_list/task_list_page.dart';
 final _rootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'root');
 
 final goRouterProvider = Provider<GoRouter>((ref) {
-  // 监听登录态，logout/login 后重建 GoRouter，确保 redirect 与 shell 栈一致
-  ref.watch(authNotifierProvider);
+  // 仅通过 refreshListenable 响应登录态；勿 watch authNotifier，避免改昵称等操作重建路由栈
   final auth = ref.read(authNotifierProvider);
 
   return GoRouter(
