@@ -17,19 +17,68 @@ import 'widgets/title_with_tags_row.dart';
 import 'widgets/recent_task_card.dart';
 import 'widgets/tag_focus_donut_chart.dart';
 
-String _formatFocusDurationCn(int seconds) {
-  final h = seconds ~/ 3600;
-  final m = (seconds % 3600) ~/ 60;
-  if (h >= 1 && m > 0) {
-    return '$h小时$m分';
+/// 时长：从左到右「大字 + 小字单位」；分钟数字略大于小时数字。
+class _FocusDurationStack extends StatelessWidget {
+  const _FocusDurationStack({required this.seconds, required this.tabular});
+
+  final int seconds;
+  final List<FontFeature> tabular;
+
+  @override
+  Widget build(BuildContext context) {
+    final h = seconds ~/ 3600;
+    final m = (seconds % 3600) ~/ 60;
+    final hourNumStyle = TextStyle(
+      fontSize: 26,
+      fontWeight: FontWeight.w800,
+      height: 1.05,
+      color: AppColors.onSurface,
+      fontFeatures: tabular,
+    );
+    final minuteNumStyle = TextStyle(
+      fontSize: 30,
+      fontWeight: FontWeight.w800,
+      height: 1.05,
+      color: AppColors.onSurface,
+      fontFeatures: tabular,
+    );
+    const unitStyle = TextStyle(
+      fontSize: 10.5,
+      fontWeight: FontWeight.w500,
+      height: 1.05,
+      color: AppColors.onSurfaceVariant,
+    );
+
+    if (h > 0) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text('$h', style: hourNumStyle),
+          const SizedBox(width: 2),
+          const Text('小时', style: unitStyle),
+          if (m > 0) ...[
+            const SizedBox(width: 6),
+            Text('$m', style: minuteNumStyle),
+            const SizedBox(width: 2),
+            const Text('分钟', style: unitStyle),
+          ],
+        ],
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('$m', style: minuteNumStyle),
+        const SizedBox(width: 2),
+        const Text('分钟', style: unitStyle),
+      ],
+    );
   }
-  if (h >= 1) {
-    return '$h小时';
-  }
-  if (m > 0) {
-    return '$m分钟';
-  }
-  return '0分钟';
 }
 
 String _upcomingSubtitle(Task t) {
@@ -57,8 +106,6 @@ class HomePage extends ConsumerWidget {
     final repo = ref.watch(taskRepositoryProvider);
     final recent = repo.recentTasksForHome(limit: 3);
     final todos = repo.todosByRecentUsage();
-    final topTagId = repo.topTagIdThisWeek();
-    final topTag = topTagId != null ? repo.tagById(topTagId) : null;
     final tabular = const [FontFeature.tabularFigures()];
     final focusSlices = repo.lastWeekFocusSecondsByTag();
     final lastWeekTotal = repo.lastWeekTotalFocusSeconds();
@@ -139,9 +186,11 @@ class HomePage extends ConsumerWidget {
           const SizedBox(height: 8),
           AppCard(
             padding: const EdgeInsets.all(10),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
+            child: SizedBox(
+              height: 196,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
                 // ── 左卡：本周完成 ──────────────────────────────
                 Expanded(
                   child: DecoratedBox(
@@ -165,7 +214,7 @@ class HomePage extends ConsumerWidget {
                       padding: const EdgeInsets.fromLTRB(14, 14, 12, 14),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
+                        mainAxisSize: MainAxisSize.max,
                         children: [
                           Row(
                             children: [
@@ -186,77 +235,52 @@ class HomePage extends ConsumerWidget {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 10),
-                          Text(
-                            '${repo.countCompletedThisWeek()}',
-                            style: TextStyle(
-                              fontSize: 38,
-                              fontWeight: FontWeight.w800,
-                              height: 1.0,
-                              color: AppColors.onSurface,
-                              fontFeatures: tabular,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            '待完成 ${repo.countPendingActive()}  ·  已取消 ${repo.countCancelled()}  ·  已超时 ${repo.countOverdue()}',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              color: AppColors.onSurfaceVariant,
-                              height: 1.4,
-                              fontFeatures: tabular,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              const Text(
-                                '本周最多标签',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: AppColors.onSurfaceVariant,
+                          const SizedBox(height: 8),
+                          Expanded(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text(
+                                  '${repo.countCompletedThisWeek()}',
+                                  style: TextStyle(
+                                    fontSize: 52,
+                                    fontWeight: FontWeight.w800,
+                                    height: 1.0,
+                                    color: AppColors.onSurface,
+                                    fontFeatures: tabular,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 6),
-                              if (topTag != null)
-                                Flexible(
-                                  child: Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 3,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: Colors.white.withValues(alpha: 0.85),
-                                      borderRadius: BorderRadius.circular(
-                                        AppRadii.chip,
-                                      ),
-                                      border: Border.all(
-                                        color: AppColors.outline.withValues(
-                                          alpha: 0.6,
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '待完成 ${repo.countPendingActive()}',
+                                        style: TextStyle(
+                                          fontSize: 13.5,
+                                          color: AppColors.onSurfaceVariant,
+                                          height: 1.35,
+                                          fontFeatures: tabular,
                                         ),
                                       ),
-                                    ),
-                                    child: Text(
-                                      topTag.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        fontSize: 11,
-                                        fontWeight: FontWeight.w600,
-                                        color: Color(0xFF1E40AF),
+                                      const SizedBox(height: 6),
+                                      Text(
+                                        '已超时 ${repo.countOverdue()}',
+                                        style: TextStyle(
+                                          fontSize: 13.5,
+                                          color: AppColors.onSurfaceVariant,
+                                          height: 1.35,
+                                          fontFeatures: tabular,
+                                        ),
                                       ),
-                                    ),
-                                  ),
-                                )
-                              else
-                                const Text(
-                                  '—',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: AppColors.onSurfaceVariant,
+                                    ],
                                   ),
                                 ),
-                            ],
+                              ],
+                            ),
                           ),
                         ],
                       ),
@@ -287,7 +311,7 @@ class HomePage extends ConsumerWidget {
                       padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisSize: MainAxisSize.min,
+                        mainAxisSize: MainAxisSize.max,
                         children: [
                           // 标题行
                           Row(
@@ -312,47 +336,45 @@ class HomePage extends ConsumerWidget {
                             ],
                           ),
                           const SizedBox(height: 10),
-                          // 内容行：甜甜圈图（左）+ 时长 & 图例（右）并排
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              TagFocusDonutChart(
-                                slices: focusSlices,
-                                resolveTag: repo.tagById,
-                                dimension: 80,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Text(
-                                      '上周总专注时长',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: AppColors.onSurfaceVariant,
-                                        height: 1.2,
+                          // 内容行：时长 & 图例（左）+ 甜甜圈图（右）
+                          Expanded(
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Text(
+                                        '近7日专注',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: AppColors.onSurfaceVariant,
+                                          height: 1.2,
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      _formatFocusDurationCn(lastWeekTotal),
-                                      style: TextStyle(
-                                        fontSize: 22,
-                                        fontWeight: FontWeight.w800,
-                                        height: 1.05,
-                                        color: AppColors.onSurface,
-                                        fontFeatures: tabular,
+                                      const SizedBox(height: 5),
+                                      _FocusDurationStack(
+                                        seconds: lastWeekTotal,
+                                        tabular: tabular,
                                       ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    for (final s in focusSlices)
-                                      _FocusLegendLine(repo: repo, slice: s),
-                                  ],
+                                      const SizedBox(height: 8),
+                                      for (final s in focusSlices.where((s) => s.seconds > 0))
+                                        _FocusLegendLine(repo: repo, slice: s),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ],
+                                const SizedBox(width: 10),
+                                TagFocusDonutChart(
+                                  slices: focusSlices,
+                                  resolveTag: repo.tagById,
+                                  dimension: 80,
+                                  repaint: repo,
+                                ),
+                              ],
+                            ),
                           ),
                         ],
                       ),
@@ -360,6 +382,7 @@ class HomePage extends ConsumerWidget {
                   ),
                 ),
               ],
+            ),
             ),
           ),
         ],
@@ -376,8 +399,18 @@ class _FocusLegendLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tag = repo.tagById(slice.tagId);
-    if (tag == null) return const SizedBox.shrink();
+    final tag = slice.tagId == '__untagged__' ? null : repo.tagById(slice.tagId);
+    final Color dotColor;
+    final String labelText;
+    if (slice.tagId == '__untagged__') {
+      dotColor = const Color(0xFF0D9488);
+      labelText = '无标签';
+    } else if (tag == null) {
+      return const SizedBox.shrink();
+    } else {
+      dotColor = tag.color;
+      labelText = tag.name;
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
@@ -386,13 +419,13 @@ class _FocusLegendLine extends StatelessWidget {
           Container(
             width: 7,
             height: 7,
-            decoration: BoxDecoration(color: tag.color, shape: BoxShape.circle),
+            decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
           ),
           const SizedBox(width: 6),
           ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 88),
             child: Text(
-              tag.name,
+              labelText,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(

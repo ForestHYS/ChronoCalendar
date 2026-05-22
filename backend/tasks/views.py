@@ -29,6 +29,8 @@ views.py
 """
 
 import uuid
+from collections import defaultdict
+from datetime import datetime, time, timedelta
 
 from django.db import IntegrityError, transaction
 from django.db.models import OuterRef, Q, Subquery, Sum
@@ -762,6 +764,155 @@ class TaskViewSet(ViewSet):
         except IntegrityError as e:
             return err("IMPORT_ERROR", f"数据库完整性错误: {e}")
         return ok({"mode": mode, **summary})
+
+
+# ---------------------------------------------------------------------------
+# 番茄钟专注会话（开始 / 结束）
+# ---------------------------------------------------------------------------
+
+
+def _focus_stats_rolling_window():
+    """专注统计滚动窗口（按本地日历日，不按小时细分边界）。
+
+    含「7 日前」当天 0:00 起至「当日」全天：即 [today-7 00:00, tomorrow 00:00) 本地时区。
+    """
+    tz = timezone.get_current_timezone()
+    today = timezone.localdate()
+    start = timezone.make_aware(
+        datetime.combine(today - timedelta(days=7), time.min), tz
+    )
+    end_exclusive = timezone.make_aware(
+        datetime.combine(today + timedelta(days=1), time.min), tz
+    )
+    return start, end_exclusive
+
+
+class FocusSessionStartView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        body = request.data or {}
+        task_id = body.get("task_id")
+        planned = body.get("planned_seconds")
+        noise_id = (body.get("noise_id") or "")[:50]
+        if not task_id:
+            return err("VALIDATION_ERROR", "缺少 task_id")
+        try:
+            tid = uuid.UUID(str(task_id))
+        except (ValueError, TypeError):
+            return err("VALIDATION_ERROR", "task_id 无效")
+        try:
+            planned_seconds = int(planned)
+        except (TypeError, ValueError):
+            return err("VALIDATION_ERROR", "planned_seconds 无效")
+        if planned_seconds < 1 or planned_seconds > 24 * 3600:
+            return err("VALIDATION_ERROR", "planned_seconds 超出范围")
+
+        task = Task.objects.filter(pk=tid, user=request.user).first()
+        if task is None:
+            return err("NOT_FOUND", "任务不存在", http_status=status.HTTP_404_NOT_FOUND)
+
+        fs = FocusSession.objects.create(
+            user=request.user,
+            task=task,
+            status=FocusSession.Status.RUNNING,
+            planned_seconds=planned_seconds,
+            noise_id=noise_id,
+        )
+        return ok(
+            {
+                "id": str(fs.id),
+                "task_id": str(task.id),
+                "status": fs.status,
+                "started_at": _iso(fs.started_at),
+                "planned_seconds": fs.planned_seconds,
+            },
+            http_status=status.HTTP_201_CREATED,
+        )
+
+
+class FocusSessionStopView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        body = request.data or {}
+        try:
+            actual = int(body.get("actual_seconds"))
+        except (TypeError, ValueError):
+            return err("VALIDATION_ERROR", "actual_seconds 无效")
+        if actual < 0:
+            return err("VALIDATION_ERROR", "actual_seconds 不能为负")
+        if actual > 24 * 3600:
+            return err("VALIDATION_ERROR", "actual_seconds 过大")
+
+        reason = (body.get("stop_reason") or "manual").lower()
+        allowed = {c[0] for c in FocusSession.StopReason.choices}
+        if reason not in allowed:
+            reason = FocusSession.StopReason.MANUAL
+
+        fs = FocusSession.objects.filter(
+            pk=pk, user=request.user, status=FocusSession.Status.RUNNING
+        ).first()
+        if fs is None:
+            return err("NOT_FOUND", "会话不存在或已结束", http_status=status.HTTP_404_NOT_FOUND)
+
+        now = timezone.now()
+        fs.status = FocusSession.Status.STOPPED
+        fs.ended_at = now
+        fs.actual_seconds = actual
+        fs.stop_reason = reason
+        fs.save(update_fields=["status", "ended_at", "actual_seconds", "stop_reason"])
+
+        return ok(
+            {
+                "id": str(fs.id),
+                "task_id": str(fs.task_id),
+                "status": fs.status,
+                "actual_seconds": fs.actual_seconds,
+                "ended_at": _iso(fs.ended_at),
+            }
+        )
+
+
+class FocusStatsLastWeekView(APIView):
+    """GET stats/focus/last-week/ — 实际为「近滚动窗口」：本地 7 日前 0 点至今（含当日）。"""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        start, end = _focus_stats_rolling_window()
+        sessions = (
+            FocusSession.objects.filter(
+                user=request.user,
+                status=FocusSession.Status.STOPPED,
+                started_at__gte=start,
+                started_at__lt=end,
+            )
+            .select_related("task")
+            .prefetch_related("task__tags")
+        )
+
+        by_tag = defaultdict(int)
+        total = 0
+        for fs in sessions:
+            sec = fs.actual_seconds or 0
+            if sec <= 0:
+                continue
+            total += sec
+            tags = list(fs.task.tags.all())
+            if not tags:
+                by_tag["__untagged__"] += sec
+            else:
+                n = len(tags)
+                base, rem = divmod(sec, n)
+                for i, tag in enumerate(tags):
+                    by_tag[str(tag.id)] += base + (1 if i < rem else 0)
+
+        by_tag_list = [
+            {"tag_id": tid, "seconds": s}
+            for tid, s in sorted(by_tag.items(), key=lambda x: -x[1])
+        ]
+        return ok({"total_seconds": total, "by_tag": by_tag_list})
 
 
 # ---------------------------------------------------------------------------

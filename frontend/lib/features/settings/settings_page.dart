@@ -487,19 +487,19 @@ class _AchievementSection extends StatelessWidget {
       ),
       _Achievement(
         title: '专注 1 小时',
-        subtitle: '上周累计 ≥ 1h',
+        subtitle: '近7日累计 ≥ 1h',
         icon: Icons.timer_outlined,
         unlocked: focusHours >= 1,
       ),
       _Achievement(
         title: '专注 5 小时',
-        subtitle: '上周累计 ≥ 5h',
+        subtitle: '近7日累计 ≥ 5h',
         icon: Icons.timelapse_outlined,
         unlocked: focusHours >= 5,
       ),
       _Achievement(
         title: '心流状态',
-        subtitle: '上周累计 ≥ 20h',
+        subtitle: '近7日累计 ≥ 20h',
         icon: Icons.auto_awesome_outlined,
         unlocked: focusHours >= 20,
       ),

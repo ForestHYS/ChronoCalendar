@@ -15,6 +15,17 @@ router.register("tasks", views.TaskViewSet, basename="task")
 
 urlpatterns = [
     path("", include(router.urls)),
+    path("focus-sessions/", views.FocusSessionStartView.as_view(), name="focus-session-start"),
+    path(
+        "focus-sessions/<uuid:pk>/stop/",
+        views.FocusSessionStopView.as_view(),
+        name="focus-session-stop",
+    ),
+    path(
+        "stats/focus/last-week/",
+        views.FocusStatsLastWeekView.as_view(),
+        name="focus-stats-last-week",
+    ),
     # 子任务：PATCH / DELETE /subtasks/{id}/
     path(
         "subtasks/<uuid:pk>/",

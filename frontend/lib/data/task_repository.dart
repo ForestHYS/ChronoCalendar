@@ -7,7 +7,8 @@ import '../domain/models/task.dart';
 import '../domain/models/task_status.dart';
 import 'task_json.dart';
 
-/// 演示：上周某标签专注时长（秒）；后端暂无统计接口时返回空。
+/// 近滚动窗口内某标签专注时长（秒），与 `stats/focus/last-week/` 一致：
+/// 本地「7 日前 0 点」至「当日末」。`tag_id` 为 `__untagged__` 表示无标签任务。
 class TagFocusSlice {
   const TagFocusSlice(this.tagId, this.seconds);
   final String tagId;
@@ -21,6 +22,8 @@ class TaskRepository extends ChangeNotifier {
 
   List<Tag> _tags = [];
   List<Task> _tasks = [];
+  List<TagFocusSlice> _lastWeekFocusByTag = [];
+  int _lastWeekFocusTotal = 0;
 
   List<Tag> get tags => List.unmodifiable(_tags);
   List<Task> get tasks => List.unmodifiable(_tasks);
@@ -29,6 +32,7 @@ class TaskRepository extends ChangeNotifier {
   Future<void> bootstrap() async {
     await refreshTags();
     await refreshTasks();
+    await refreshFocusStats();
   }
 
   Future<void> refreshTags() async {
@@ -60,6 +64,65 @@ class TaskRepository extends ChangeNotifier {
     }
     _tasks = all;
     notifyListeners();
+  }
+
+  /// 拉取专注统计（按标签拆分）：本地 7 日前 0 点—当日末（与后端滚动窗口一致）。
+  Future<void> refreshFocusStats() async {
+    try {
+      final data = await _api.request('GET', 'stats/focus/last-week/', auth: true);
+      if (data is Map<String, dynamic>) {
+        _lastWeekFocusTotal = (data['total_seconds'] as num?)?.round() ?? 0;
+        final raw = data['by_tag'] as List<dynamic>? ?? const [];
+        _lastWeekFocusByTag = [
+          for (final e in raw)
+            if (e is Map<String, dynamic>)
+              TagFocusSlice(
+                e['tag_id'] as String? ?? '',
+                (e['seconds'] as num?)?.round() ?? 0,
+              ),
+        ];
+        notifyListeners();
+      }
+    } catch (_) {
+      // 网络失败时保留上次数据，避免主页报错
+    }
+  }
+
+  Future<String?> startFocusSession({
+    required String taskId,
+    required int plannedSeconds,
+    String noiseId = '',
+  }) async {
+    final data = await _api.request(
+      'POST',
+      'focus-sessions/',
+      body: {
+        'task_id': taskId,
+        'planned_seconds': plannedSeconds,
+        'noise_id': noiseId,
+      },
+      auth: true,
+    );
+    if (data is Map<String, dynamic>) {
+      return data['id'] as String?;
+    }
+    return null;
+  }
+
+  Future<void> stopFocusSession({
+    required String sessionId,
+    required int actualSeconds,
+    String stopReason = 'manual',
+  }) async {
+    await _api.request(
+      'POST',
+      'focus-sessions/$sessionId/stop/',
+      body: {
+        'actual_seconds': actualSeconds,
+        'stop_reason': stopReason,
+      },
+      auth: true,
+    );
   }
 
   Future<void> ensureTaskLoaded(String id) async {
@@ -232,13 +295,9 @@ class TaskRepository extends ChangeNotifier {
     return counts.entries.reduce((a, b) => a.value >= b.value ? a : b).key;
   }
 
-  List<TagFocusSlice> lastWeekFocusSecondsByTag() {
-    return const [];
-  }
+  List<TagFocusSlice> lastWeekFocusSecondsByTag() => List.unmodifiable(_lastWeekFocusByTag);
 
-  int lastWeekTotalFocusSeconds() {
-    return 0;
-  }
+  int lastWeekTotalFocusSeconds() => _lastWeekFocusTotal;
 
   void touchTask(String id) {}
 
