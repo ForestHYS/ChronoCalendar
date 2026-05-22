@@ -15,6 +15,7 @@ import '../../features/settings/tag_manage_page.dart';
 import '../../features/shell/main_shell.dart';
 import '../../features/task_detail/task_detail_page.dart';
 import '../../features/task_list/task_list_page.dart';
+import 'shell_animated_branch_container.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'root');
 
@@ -43,7 +44,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/register',
         builder: (context, state) => const RegisterPage(),
       ),
-      StatefulShellRoute.indexedStack(
+      StatefulShellRoute(
+        navigatorContainerBuilder: shellAnimatedBranchContainer,
         builder: (context, state, navigationShell) {
           return MainShell(navigationShell: navigationShell);
         },

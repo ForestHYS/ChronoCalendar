@@ -100,6 +100,9 @@ class AuthNotifier extends ChangeNotifier {
 /// 昵称等资料变更后递增，供设置页刷新展示（不触发 GoRouter 重建）。
 final profileRefreshProvider = StateProvider<int>((ref) => 0);
 
+/// 底栏 Tab 切换方向：1 向右切（索引增大），−1 向左切。
+final shellNavDirectionProvider = StateProvider<int>((ref) => 1);
+
 final authNotifierProvider = ChangeNotifierProvider<AuthNotifier>((ref) {
   return AuthNotifier(
     ref.watch(authRepositoryProvider),

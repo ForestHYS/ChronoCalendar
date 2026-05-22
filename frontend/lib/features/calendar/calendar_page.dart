@@ -3,7 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
+import 'widgets/calendar_view_body_switcher.dart';
 import '../../data/providers.dart';
+import '../../data/task_repository.dart';
+import '../../domain/models/task.dart';
 import 'models/calendar_view_mode.dart';
 import 'utils/calendar_task_layout.dart';
 import 'widgets/calendar_day_view.dart';
@@ -23,9 +26,13 @@ class _CalendarPageState extends ConsumerState<CalendarPage> {
   CalendarViewMode _mode = CalendarViewMode.week;
   DateTime _selectedDate = DateTime.now();
   bool _todoExpanded = false;
+  int _transitionDirection = 1;
+  CalendarBodyTransitionKind _transitionKind = CalendarBodyTransitionKind.none;
 
   void _move(int delta) {
     setState(() {
+      _transitionKind = CalendarBodyTransitionKind.periodSlide;
+      _transitionDirection = delta > 0 ? 1 : -1;
       _selectedDate = switch (_mode) {
         CalendarViewMode.day => _selectedDate.add(Duration(days: delta)),
         CalendarViewMode.week => _selectedDate.add(Duration(days: delta * 7)),
@@ -39,7 +46,67 @@ class _CalendarPageState extends ConsumerState<CalendarPage> {
   }
 
   void _goToday() {
-    setState(() => _selectedDate = DateTime.now());
+    final today = DateTime.now();
+    setState(() {
+      _transitionKind = CalendarBodyTransitionKind.periodSlide;
+      _transitionDirection = _selectedDate.isBefore(today) ? 1 : -1;
+      _selectedDate = today;
+    });
+  }
+
+  void _selectDateInView(DateTime date) {
+    setState(() {
+      _transitionKind = CalendarBodyTransitionKind.none;
+      _selectedDate = date;
+    });
+  }
+
+  void _onModeChanged(CalendarViewMode mode) {
+    if (mode == _mode) return;
+    setState(() {
+      _transitionKind = CalendarBodyTransitionKind.modeChange;
+      _transitionDirection = mode.index.compareTo(_mode.index);
+      _mode = mode;
+    });
+  }
+
+  Widget _buildCalendarBody(List<Task> tasks, TaskRepository repo) {
+    return switch (_mode) {
+      CalendarViewMode.day => CalendarDayView(
+          selectedDate: _selectedDate,
+          tasks: tasks,
+          repo: repo,
+        ),
+      CalendarViewMode.week => CalendarWeekView(
+          selectedDate: _selectedDate,
+          tasks: tasks,
+          repo: repo,
+          onDateSelected: _selectDateInView,
+        ),
+      CalendarViewMode.month => CalendarMonthView(
+          selectedDate: _selectedDate,
+          tasks: tasks,
+          repo: repo,
+          onDateSelected: _selectDateInView,
+        ),
+    };
+  }
+
+  Key get _bodyKey {
+    return switch (_transitionKind) {
+      CalendarBodyTransitionKind.none => ValueKey('mode_${_mode.name}'),
+      CalendarBodyTransitionKind.periodSlide => ValueKey('period_${_mode.name}_$_periodStamp'),
+      CalendarBodyTransitionKind.modeChange => ValueKey('mode_${_mode.name}_$_periodStamp'),
+    };
+  }
+
+  String get _periodStamp {
+    return switch (_mode) {
+      CalendarViewMode.day =>
+        '${_selectedDate.year}-${_selectedDate.month}-${_selectedDate.day}',
+      CalendarViewMode.week => startOfWeek(_selectedDate).toIso8601String(),
+      CalendarViewMode.month => '${_selectedDate.year}-${_selectedDate.month}',
+    };
   }
 
   @override
@@ -72,29 +139,18 @@ class _CalendarPageState extends ConsumerState<CalendarPage> {
                   mode: _mode,
                   onPrevious: () => _move(-1),
                   onNext: () => _move(1),
-                  onModeChanged: (mode) => setState(() => _mode = mode),
+                  onModeChanged: (m) => _onModeChanged(m),
                 ),
               ),
               Expanded(
-                child: switch (_mode) {
-                  CalendarViewMode.day => CalendarDayView(
-                      selectedDate: _selectedDate,
-                      tasks: tasks,
-                      repo: repo,
-                    ),
-                  CalendarViewMode.week => CalendarWeekView(
-                      selectedDate: _selectedDate,
-                      tasks: tasks,
-                      repo: repo,
-                      onDateSelected: (date) => setState(() => _selectedDate = date),
-                    ),
-                  CalendarViewMode.month => CalendarMonthView(
-                      selectedDate: _selectedDate,
-                      tasks: tasks,
-                      repo: repo,
-                      onDateSelected: (date) => setState(() => _selectedDate = date),
-                    ),
-                },
+                child: CalendarViewBodySwitcher(
+                  kind: _transitionKind,
+                  direction: _transitionDirection,
+                  child: KeyedSubtree(
+                    key: _bodyKey,
+                    child: _buildCalendarBody(tasks, repo),
+                  ),
+                ),
               ),
             ],
           ),
