@@ -195,76 +195,6 @@ class SettingsPage extends ConsumerWidget {
       );
     }
   }
-}
-
-class _EditNicknameDialog extends ConsumerStatefulWidget {
-  const _EditNicknameDialog({required this.initial});
-
-  final String initial;
-
-  @override
-  ConsumerState<_EditNicknameDialog> createState() => _EditNicknameDialogState();
-}
-
-class _EditNicknameDialogState extends ConsumerState<_EditNicknameDialog> {
-  late final TextEditingController _c;
-  bool _saving = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _c = TextEditingController(text: widget.initial);
-  }
-
-  @override
-  void dispose() {
-    _c.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (_saving) return;
-    setState(() => _saving = true);
-    try {
-      await ref.read(authNotifierProvider).updateNickname(_c.text);
-      if (!mounted) return;
-      Navigator.of(context).pop(true);
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _saving = false);
-      await showAppErrorDialog(context, title: '保存失败', error: e);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('修改昵称'),
-      content: TextField(
-        controller: _c,
-        autofocus: true,
-        maxLength: 150,
-        enabled: !_saving,
-        decoration: const InputDecoration(labelText: '昵称'),
-      ),
-      actions: [
-        TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
-          child: const Text('取消'),
-        ),
-        OutlinedButton(
-          onPressed: _saving ? null : _save,
-          child: _saving
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Text('保存'),
-        ),
-      ],
-    );
-  }
 
   static Future<void> _exportData(BuildContext context, WidgetRef ref) async {
     final repo = ref.read(taskRepositoryProvider);
@@ -286,8 +216,7 @@ class _EditNicknameDialogState extends ConsumerState<_EditNicknameDialog> {
         type: FileType.custom,
         allowedExtensions: const ['json'],
       );
-      if (saved == null) return; // 用户取消
-      // 桌面端 saveFile 只返回路径，需要手动写入；移动端 / web 由插件内部完成
+      if (saved == null) return;
       await ensureFileWritten(saved, bytes);
       messenger.showSnackBar(const SnackBar(content: Text('导出成功')));
     } catch (e) {
@@ -365,6 +294,76 @@ class _EditNicknameDialogState extends ConsumerState<_EditNicknameDialog> {
           ],
         );
       },
+    );
+  }
+}
+
+class _EditNicknameDialog extends ConsumerStatefulWidget {
+  const _EditNicknameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  ConsumerState<_EditNicknameDialog> createState() => _EditNicknameDialogState();
+}
+
+class _EditNicknameDialogState extends ConsumerState<_EditNicknameDialog> {
+  late final TextEditingController _c;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(authNotifierProvider).updateNickname(_c.text);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await showAppErrorDialog(context, title: '保存失败', error: e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('修改昵称'),
+      content: TextField(
+        controller: _c,
+        autofocus: true,
+        maxLength: 150,
+        enabled: !_saving,
+        decoration: const InputDecoration(labelText: '昵称'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        OutlinedButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('保存'),
+        ),
+      ],
     );
   }
 }
