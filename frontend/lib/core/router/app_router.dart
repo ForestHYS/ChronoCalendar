@@ -92,6 +92,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/task/new',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => TaskDetailPage(
+          key: const ValueKey<String>('task-route-new'),
           taskId: null,
           initialExtra: state.extra,
         ),
@@ -101,7 +102,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) {
           final id = state.pathParameters['id']!;
-          return TaskDetailPage(taskId: id);
+          return TaskDetailPage(
+            key: ValueKey<String>('task-route-$id'),
+            taskId: id,
+          );
         },
       ),
       GoRoute(

@@ -69,23 +69,27 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     _draftDueAt = null;
   }
 
+  void _scheduleHydratePersistedTask(String id) {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || widget.taskId != id) return;
+      try {
+        await ref.read(taskRepositoryProvider).ensureTaskLoaded(id);
+        if (!mounted || widget.taskId != id) return;
+        final t0 = ref.read(taskRepositoryProvider).taskById(id);
+        if (t0 != null) _fillControllers(t0);
+        if (mounted) setState(() {});
+      } catch (e) {
+        if (!mounted) return;
+        await showAppErrorDialog(context, title: '加载失败', error: e);
+      }
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     if (widget.taskId != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (!mounted) return;
-        try {
-          await ref.read(taskRepositoryProvider).ensureTaskLoaded(widget.taskId!);
-          if (!mounted) return;
-          final t0 = ref.read(taskRepositoryProvider).taskById(widget.taskId!);
-          if (t0 != null) _fillControllers(t0);
-          setState(() {});
-        } catch (e) {
-          if (!mounted) return;
-          await showAppErrorDialog(context, title: '加载失败', error: e);
-        }
-      });
+      _scheduleHydratePersistedTask(widget.taskId!);
     } else {
       _localTask = _defaultLocalTask(TaskType.block);
       _editing = true;
@@ -94,6 +98,36 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
       final draft = _readAgentDraft(widget.initialExtra);
       if (draft != null) _applyAgentDraftLocal(draft);
       _initialNewSnapshot = _snapshotTask(_localTask!);
+    }
+  }
+
+  @override
+  void didUpdateWidget(TaskDetailPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final wasNew = oldWidget.taskId == null;
+    final nowId = widget.taskId;
+    if (wasNew && nowId != null) {
+      // 保存后 context.replace 到真实 id：丢弃新建草稿，进入详情。
+      setState(() {
+        _localTask = null;
+        _editing = false;
+        _baselineTask = null;
+        _initialNewSnapshot = null;
+        _clearDrafts();
+      });
+      _scheduleHydratePersistedTask(nowId);
+      return;
+    }
+    if (oldWidget.taskId != null &&
+        nowId != null &&
+        oldWidget.taskId != nowId) {
+      setState(() {
+        _localTask = null;
+        _editing = false;
+        _baselineTask = null;
+        _clearDrafts();
+      });
+      _scheduleHydratePersistedTask(nowId);
     }
   }
 
@@ -136,9 +170,12 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
   }
 
   Task? _displayTask(TaskRepository repo) {
-    if (_localTask != null) return _localTask;
-    if (_tid != null) return repo.taskById(_tid!);
-    return null;
+    // 已落库任务：非编辑态以仓库为准，避免保存后仍显示「新建」本地草稿（State 复用 / 重建时序问题）。
+    if (widget.taskId != null) {
+      if (_editing && _localTask != null) return _localTask;
+      return repo.taskById(widget.taskId!);
+    }
+    return _localTask;
   }
 
   Map<String, dynamic>? _readAgentDraft(Object? extra) {

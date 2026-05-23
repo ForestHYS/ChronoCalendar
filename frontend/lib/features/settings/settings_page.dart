@@ -124,23 +124,24 @@ class SettingsPage extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           AppCard(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: Column(
+            padding: const EdgeInsets.all(10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ListTile(
-                  leading: const Icon(Icons.upload_file_outlined),
-                  title: const Text('导出全部数据'),
-                  subtitle: const Text('保存任务、标签、子任务、专注会话到 JSON 文件'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => _exportData(context, ref),
+                Expanded(
+                  child: _ImportExportTile(
+                    icon: Icons.upload_file_outlined,
+                    title: '导出数据到json',
+                    onTap: () => _exportData(context, ref),
+                  ),
                 ),
-                const Divider(height: 1, color: AppColors.outline),
-                ListTile(
-                  leading: const Icon(Icons.file_download_outlined),
-                  title: const Text('导入数据'),
-                  subtitle: const Text('从 JSON 文件还原（merge）或复制（duplicate）'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => _importData(context, ref),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _ImportExportTile(
+                    icon: Icons.file_download_outlined,
+                    title: '导入数据',
+                    onTap: () => _importData(context, ref),
+                  ),
                 ),
               ],
             ),
@@ -198,7 +199,6 @@ class SettingsPage extends ConsumerWidget {
 
   static Future<void> _exportData(BuildContext context, WidgetRef ref) async {
     final repo = ref.read(taskRepositoryProvider);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final data = await repo.exportAll();
       final pretty = const JsonEncoder.withIndent('  ').convert(data);
@@ -218,7 +218,12 @@ class SettingsPage extends ConsumerWidget {
       );
       if (saved == null) return;
       await ensureFileWritten(saved, bytes);
-      messenger.showSnackBar(const SnackBar(content: Text('导出成功')));
+      if (!context.mounted) return;
+      await showAppMessageDialog(
+        context,
+        title: '导出成功',
+        message: 'JSON 文件已保存到所选位置。',
+      );
     } catch (e) {
       if (!context.mounted) return;
       await showAppErrorDialog(context, title: '导出失败', error: e);
@@ -226,7 +231,6 @@ class SettingsPage extends ConsumerWidget {
   }
 
   static Future<void> _importData(BuildContext context, WidgetRef ref) async {
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final picked = await FilePicker.pickFiles(
         dialogTitle: '选择导入文件',
@@ -253,14 +257,14 @@ class SettingsPage extends ConsumerWidget {
           .importData(decoded, mode: mode);
       final tagsSum = summary['tags'] as Map<String, dynamic>? ?? const {};
       final tasksSum = summary['tasks'] as Map<String, dynamic>? ?? const {};
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            '导入完成（${summary['mode']}）：'
-            '任务 +${tasksSum['created'] ?? 0} / 更新 ${tasksSum['updated'] ?? 0}，'
-            '标签 +${tagsSum['created'] ?? 0} / 复用 ${tagsSum['reused'] ?? 0}',
-          ),
-        ),
+      if (!context.mounted) return;
+      await showAppMessageDialog(
+        context,
+        title: '导入完成',
+        message:
+            '模式：${summary['mode']}\n\n'
+            '任务：新增 ${tasksSum['created'] ?? 0}，更新 ${tasksSum['updated'] ?? 0}\n'
+            '标签：新增 ${tagsSum['created'] ?? 0}，复用 ${tagsSum['reused'] ?? 0}',
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -294,6 +298,56 @@ class SettingsPage extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _ImportExportTile extends StatelessWidget {
+  const _ImportExportTile({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.surfaceContainerHigh.withValues(alpha: 0.45),
+      borderRadius: BorderRadius.circular(11),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(11),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 26,
+                color: AppColors.primary.withValues(alpha: 0.9),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.onSurface,
+                  height: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -455,7 +509,7 @@ class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
   }
 }
 
-class _AchievementSection extends StatelessWidget {
+class _AchievementSection extends StatefulWidget {
   const _AchievementSection({
     required this.completedTotal,
     required this.focusSeconds,
@@ -464,26 +518,33 @@ class _AchievementSection extends StatelessWidget {
   final int completedTotal;
   final int focusSeconds;
 
+  @override
+  State<_AchievementSection> createState() => _AchievementSectionState();
+}
+
+class _AchievementSectionState extends State<_AchievementSection> {
+  bool _expanded = false;
+
   List<_Achievement> _items() {
-    final focusHours = focusSeconds / 3600.0;
+    final focusHours = widget.focusSeconds / 3600.0;
     return <_Achievement>[
       _Achievement(
         title: '新手上路',
         subtitle: '完成 1 个任务',
         icon: Icons.emoji_events_outlined,
-        unlocked: completedTotal >= 1,
+        unlocked: widget.completedTotal >= 1,
       ),
       _Achievement(
         title: '坚持不懈',
         subtitle: '完成 10 个任务',
         icon: Icons.military_tech_outlined,
-        unlocked: completedTotal >= 10,
+        unlocked: widget.completedTotal >= 10,
       ),
       _Achievement(
         title: '效率达人',
         subtitle: '完成 30 个任务',
         icon: Icons.workspace_premium_outlined,
-        unlocked: completedTotal >= 30,
+        unlocked: widget.completedTotal >= 30,
       ),
       _Achievement(
         title: '专注 1 小时',
@@ -506,81 +567,55 @@ class _AchievementSection extends StatelessWidget {
     ];
   }
 
-  void _openAll(BuildContext context) {
-    final items = _items();
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text(
-                  '全部成就',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 12),
-                ...items.map((a) => Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: _AchievementCard(a: a),
-                    )),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final items = _items();
-    final visible = items.take(4).toList();
 
     return AppCard(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              const Text(
-                '成就勋章',
-                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.onSurface),
-              ),
-              const Spacer(),
-              IconButton(
-                icon: const Icon(Icons.expand_more_rounded, color: AppColors.onSurfaceVariant),
-                tooltip: '查看全部',
-                onPressed: () => _openAll(context),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          LayoutBuilder(
-            builder: (context, c) {
-              final w = c.maxWidth;
-              final itemW = (w - 10) / 2;
-              return Wrap(
-                spacing: 10,
-                runSpacing: 10,
+          InkWell(
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(10),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+              child: Row(
                 children: [
-                  for (final a in visible)
-                    SizedBox(
-                      width: itemW,
-                      child: _AchievementCard(a: a),
-                    ),
+                  const Text(
+                    '成就勋章',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.onSurface),
+                  ),
+                  const Spacer(),
+                  Icon(
+                    _expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                    color: AppColors.onSurfaceVariant,
+                  ),
                 ],
-              );
-            },
+              ),
+            ),
           ),
+          if (_expanded) ...[
+            const SizedBox(height: 10),
+            LayoutBuilder(
+              builder: (context, c) {
+                final w = c.maxWidth;
+                final itemW = (w - 10) / 2;
+                return Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    for (final a in items)
+                      SizedBox(
+                        width: itemW,
+                        child: _AchievementCard(a: a),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ],
         ],
       ),
     );
