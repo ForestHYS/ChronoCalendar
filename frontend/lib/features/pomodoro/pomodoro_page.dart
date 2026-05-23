@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../../core/theme/app_colors.dart';
+import '../../core/ui/app_message_dialog.dart';
 import '../../data/providers.dart';
 
 class PomodoroPage extends ConsumerStatefulWidget {
@@ -35,6 +36,32 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
 
   final AudioPlayer _player = AudioPlayer();
   String? _bgmAsset;
+  DateTime? _focusClockStart;
+  int _accumulatedFocusSeconds = 0;
+  String? _focusSessionId;
+  bool _sessionReported = false;
+
+  void _flushFocusClock() {
+    final start = _focusClockStart;
+    if (start != null) {
+      _accumulatedFocusSeconds += DateTime.now().difference(start).inSeconds;
+      _focusClockStart = null;
+    }
+  }
+
+  Future<void> _reportFocusSession() async {
+    if (_sessionReported) return;
+    final sid = _focusSessionId;
+    if (sid == null) return;
+    _sessionReported = true;
+    final sec = _accumulatedFocusSeconds.clamp(0, 86400);
+    try {
+      final repo = ref.read(taskRepositoryProvider);
+      await repo.stopFocusSession(sessionId: sid, actualSeconds: sec, stopReason: 'manual');
+      await repo.refreshFocusStats();
+      await repo.refreshTasks();
+    } catch (_) {}
+  }
 
   @override
   void initState() {
@@ -58,6 +85,10 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
 
   @override
   void dispose() {
+    if (_phase == _Phase.focus) {
+      _flushFocusClock();
+    }
+    unawaited(_reportFocusSession());
     _ticker?.cancel();
     unawaited(WakelockPlus.disable());
     _player.dispose();
@@ -80,13 +111,20 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
 
   void _setRunning(bool v) {
     if (_running == v) return;
+    if (!v && _phase == _Phase.focus) {
+      _flushFocusClock();
+    }
     setState(() => _running = v);
     if (v) {
       _ticker?.cancel();
       _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+      if (_phase == _Phase.focus) {
+        _focusClockStart = DateTime.now();
+      }
     } else {
       _ticker?.cancel();
       _ticker = null;
+      _focusClockStart = null;
     }
     unawaited(_applyWakeLock());
   }
@@ -111,11 +149,15 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
   }
 
   void _onFocusComplete() {
+    _flushFocusClock();
+    _focusClockStart = null;
     _hapticBurst();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('专注完成，进入休息')),
-      );
+      unawaited(showAppMessageDialog(
+        context,
+        title: '专注完成',
+        message: '进入休息阶段',
+      ));
     }
     _ticker?.cancel();
     setState(() {
@@ -130,9 +172,11 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
   void _onRestComplete() {
     _hapticBurst();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('休息结束，开始下一轮专注')),
-      );
+      unawaited(showAppMessageDialog(
+        context,
+        title: '休息结束',
+        message: '开始下一轮专注',
+      ));
     }
     _ticker?.cancel();
     setState(() {
@@ -141,12 +185,38 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
       _running = true;
     });
     _ticker = Timer.periodic(const Duration(seconds: 1), (_) => _tick());
+    if (_running) {
+      _focusClockStart = DateTime.now();
+    }
     unawaited(_applyWakeLock());
   }
 
-  void _start() {
+  Future<void> _start() async {
     if (!_sessionLocked) {
       setState(() => _sessionLocked = true);
+      final tid = widget.taskId;
+      if (tid != null && _focusSessionId == null) {
+        var noise = _bgmAsset ?? '';
+        if (noise.length > 50) {
+          noise = noise.substring(0, 50);
+        }
+        try {
+          final id = await ref.read(taskRepositoryProvider).startFocusSession(
+                taskId: tid,
+                plannedSeconds: _sessionFocusSeconds,
+                noiseId: noise,
+              );
+          if (mounted && id != null) {
+            setState(() => _focusSessionId = id);
+          }
+        } catch (_) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('无法连接专注记录，将仅本地计时')),
+            );
+          }
+        }
+      }
     }
     _setRunning(true);
   }
@@ -158,15 +228,21 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
   Future<void> _terminate() async {
     _ticker?.cancel();
     _ticker = null;
+    if (_phase == _Phase.focus) {
+      _flushFocusClock();
+    }
     setState(() {
       _running = false;
       _sessionLocked = false;
       _phase = _Phase.focus;
       _left = Duration(seconds: _sessionFocusSeconds);
     });
+    _focusClockStart = null;
     await WakelockPlus.disable();
     await _player.stop();
-    if (mounted) context.pop();
+    await _reportFocusSession();
+    if (!mounted) return;
+    context.pop();
   }
 
   String _mmss(Duration d) {
@@ -365,7 +441,7 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   OutlinedButton(
-                    onPressed: _running ? null : _start,
+                    onPressed: _running ? null : () => unawaited(_start()),
                     child: const Text('开始'),
                   ),
                   const SizedBox(width: 12),

@@ -26,6 +26,14 @@ class TagSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "color", "created_at", "updated_at"]
         read_only_fields = ["id", "created_at", "updated_at"]
 
+    def validate_name(self, value):
+        n = (value or "").strip()
+        if not n:
+            raise serializers.ValidationError("标签名称不能为空")
+        if len(n) > 20:
+            raise serializers.ValidationError("标签名称不能超过 20 个字符")
+        return n
+
 
 # ---------------------------------------------------------------------------
 # SubTask
@@ -132,6 +140,17 @@ class TaskSerializer(serializers.Serializer):
                         "message": "ddl 类型必须提供 due_at",
                     }
                 )
+
+        if task_type == "todo":
+            em = data.get("expected_minutes")
+            if em is not None and em is not _UNSET:
+                if em < 1 or em > 99999:
+                    raise serializers.ValidationError(
+                        {
+                            "code": "INVALID_FIELD",
+                            "message": "预计投入须在 1–99999 分钟之间",
+                        }
+                    )
 
         return data
 

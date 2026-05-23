@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../core/theme/app_colors.dart';
 import '../../core/ui/app_error_dialog.dart';
+import '../../core/ui/app_message_dialog.dart';
 import '../../core/utils/desktop_file_writer_stub.dart'
     if (dart.library.io) '../../core/utils/desktop_file_writer_io.dart';
 import '../../data/providers.dart';
@@ -17,6 +18,7 @@ class SettingsPage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    ref.watch(profileRefreshProvider);
     final authRepo = ref.watch(authRepositoryProvider);
     final taskRepo = ref.watch(taskRepositoryProvider);
     final email = authRepo.savedEmail ?? '未登录';
@@ -122,23 +124,24 @@ class SettingsPage extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
           AppCard(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: Column(
+            padding: const EdgeInsets.all(10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                ListTile(
-                  leading: const Icon(Icons.upload_file_outlined),
-                  title: const Text('导出全部数据'),
-                  subtitle: const Text('保存任务、标签、子任务、专注会话到 JSON 文件'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => _exportData(context, ref),
+                Expanded(
+                  child: _ImportExportTile(
+                    icon: Icons.upload_file_outlined,
+                    title: '导出数据到json',
+                    onTap: () => _exportData(context, ref),
+                  ),
                 ),
-                const Divider(height: 1, color: AppColors.outline),
-                ListTile(
-                  leading: const Icon(Icons.file_download_outlined),
-                  title: const Text('导入数据'),
-                  subtitle: const Text('从 JSON 文件还原（merge）或复制（duplicate）'),
-                  trailing: const Icon(Icons.chevron_right_rounded),
-                  onTap: () => _importData(context, ref),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _ImportExportTile(
+                    icon: Icons.file_download_outlined,
+                    title: '导入数据',
+                    onTap: () => _importData(context, ref),
+                  ),
                 ),
               ],
             ),
@@ -167,92 +170,35 @@ class SettingsPage extends ConsumerWidget {
   }
 
   static Future<void> _showEditNickname(BuildContext context, WidgetRef ref) async {
-    final repo = ref.read(authRepositoryProvider);
-    final c = TextEditingController(text: repo.nickname);
-    final nav = Navigator.of(context);
-    await showDialog<void>(
+    final initial = ref.read(authRepositoryProvider).nickname;
+    final saved = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('修改昵称'),
-          content: TextField(
-            controller: c,
-            autofocus: true,
-            decoration: const InputDecoration(labelText: '昵称'),
-          ),
-          actions: [
-            TextButton(onPressed: () => dialogContext.pop(), child: const Text('取消')),
-            OutlinedButton(
-              onPressed: () async {
-                try {
-                  await ref.read(authRepositoryProvider).updateNickname(c.text);
-                  nav.pop();
-                } catch (e) {
-                  if (!context.mounted) return;
-                  await showAppErrorDialog(context, title: '保存失败', error: e);
-                }
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        );
-      },
+      barrierDismissible: true,
+      builder: (_) => _EditNicknameDialog(initial: initial),
     );
+    if (saved == true && context.mounted) {
+      ref.read(profileRefreshProvider.notifier).state++;
+      await showAppMessageDialog(context, title: '已保存', message: '昵称已更新');
+    }
   }
 
   static Future<void> _showChangePassword(BuildContext context, WidgetRef ref) async {
-    final currentC = TextEditingController();
-    final nextC = TextEditingController();
-    final messenger = ScaffoldMessenger.of(context);
-    final nav = Navigator.of(context);
-    await showDialog<void>(
+    final saved = await showDialog<bool>(
       context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('修改密码'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: currentC,
-                decoration: const InputDecoration(labelText: '当前密码'),
-                obscureText: true,
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: nextC,
-                decoration: const InputDecoration(labelText: '新密码（至少 6 位）'),
-                obscureText: true,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => dialogContext.pop(), child: const Text('取消')),
-            OutlinedButton(
-              onPressed: () async {
-                try {
-                  await ref.read(authRepositoryProvider).changePassword(
-                        current: currentC.text,
-                        next: nextC.text,
-                      );
-                  nav.pop();
-                  messenger.showSnackBar(const SnackBar(content: Text('密码已更新')));
-                } catch (e) {
-                  if (!context.mounted) return;
-                  await showAppErrorDialog(context, title: '修改失败', error: e);
-                }
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        );
-      },
+      barrierDismissible: true,
+      builder: (_) => const _ChangePasswordDialog(),
     );
+    if (saved == true && context.mounted) {
+      await showAppMessageDialog(
+        context,
+        title: '已保存',
+        message: '密码已更新，请使用新密码登录',
+      );
+    }
   }
 
   static Future<void> _exportData(BuildContext context, WidgetRef ref) async {
     final repo = ref.read(taskRepositoryProvider);
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final data = await repo.exportAll();
       final pretty = const JsonEncoder.withIndent('  ').convert(data);
@@ -270,10 +216,14 @@ class SettingsPage extends ConsumerWidget {
         type: FileType.custom,
         allowedExtensions: const ['json'],
       );
-      if (saved == null) return; // 用户取消
-      // 桌面端 saveFile 只返回路径，需要手动写入；移动端 / web 由插件内部完成
+      if (saved == null) return;
       await ensureFileWritten(saved, bytes);
-      messenger.showSnackBar(const SnackBar(content: Text('导出成功')));
+      if (!context.mounted) return;
+      await showAppMessageDialog(
+        context,
+        title: '导出成功',
+        message: 'JSON 文件已保存到所选位置。',
+      );
     } catch (e) {
       if (!context.mounted) return;
       await showAppErrorDialog(context, title: '导出失败', error: e);
@@ -281,7 +231,6 @@ class SettingsPage extends ConsumerWidget {
   }
 
   static Future<void> _importData(BuildContext context, WidgetRef ref) async {
-    final messenger = ScaffoldMessenger.of(context);
     try {
       final picked = await FilePicker.pickFiles(
         dialogTitle: '选择导入文件',
@@ -308,14 +257,14 @@ class SettingsPage extends ConsumerWidget {
           .importData(decoded, mode: mode);
       final tagsSum = summary['tags'] as Map<String, dynamic>? ?? const {};
       final tasksSum = summary['tasks'] as Map<String, dynamic>? ?? const {};
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            '导入完成（${summary['mode']}）：'
-            '任务 +${tasksSum['created'] ?? 0} / 更新 ${tasksSum['updated'] ?? 0}，'
-            '标签 +${tagsSum['created'] ?? 0} / 复用 ${tagsSum['reused'] ?? 0}',
-          ),
-        ),
+      if (!context.mounted) return;
+      await showAppMessageDialog(
+        context,
+        title: '导入完成',
+        message:
+            '模式：${summary['mode']}\n\n'
+            '任务：新增 ${tasksSum['created'] ?? 0}，更新 ${tasksSum['updated'] ?? 0}\n'
+            '标签：新增 ${tagsSum['created'] ?? 0}，复用 ${tagsSum['reused'] ?? 0}',
       );
     } catch (e) {
       if (!context.mounted) return;
@@ -353,6 +302,213 @@ class SettingsPage extends ConsumerWidget {
   }
 }
 
+class _ImportExportTile extends StatelessWidget {
+  const _ImportExportTile({
+    required this.icon,
+    required this.title,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.surfaceContainerHigh.withValues(alpha: 0.45),
+      borderRadius: BorderRadius.circular(11),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(11),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 26,
+                color: AppColors.primary.withValues(alpha: 0.9),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.onSurface,
+                  height: 1.2,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EditNicknameDialog extends ConsumerStatefulWidget {
+  const _EditNicknameDialog({required this.initial});
+
+  final String initial;
+
+  @override
+  ConsumerState<_EditNicknameDialog> createState() => _EditNicknameDialogState();
+}
+
+class _EditNicknameDialogState extends ConsumerState<_EditNicknameDialog> {
+  late final TextEditingController _c;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = TextEditingController(text: widget.initial);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(authNotifierProvider).updateNickname(_c.text);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await showAppErrorDialog(context, title: '保存失败', error: e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('修改昵称'),
+      content: TextField(
+        controller: _c,
+        autofocus: true,
+        maxLength: 150,
+        enabled: !_saving,
+        decoration: const InputDecoration(labelText: '昵称'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        OutlinedButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChangePasswordDialog extends ConsumerStatefulWidget {
+  const _ChangePasswordDialog();
+
+  @override
+  ConsumerState<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+}
+
+class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
+  late final TextEditingController _currentC;
+  late final TextEditingController _nextC;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentC = TextEditingController();
+    _nextC = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _currentC.dispose();
+    _nextC.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      await ref.read(authNotifierProvider).changePassword(
+            current: _currentC.text,
+            next: _nextC.text,
+          );
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await showAppErrorDialog(context, title: '修改失败', error: e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('修改密码'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _currentC,
+            decoration: const InputDecoration(labelText: '当前密码'),
+            obscureText: true,
+            autofillHints: const [],
+            enabled: !_saving,
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _nextC,
+            decoration: const InputDecoration(labelText: '新密码（至少 6 位）'),
+            obscureText: true,
+            autofillHints: const [],
+            enabled: !_saving,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        OutlinedButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
 class _AchievementSection extends StatefulWidget {
   const _AchievementSection({
     required this.completedTotal,
@@ -366,7 +522,7 @@ class _AchievementSection extends StatefulWidget {
   State<_AchievementSection> createState() => _AchievementSectionState();
 }
 
-class _AchievementSectionState extends State<_AchievementSection> with TickerProviderStateMixin {
+class _AchievementSectionState extends State<_AchievementSection> {
   bool _expanded = false;
 
   List<_Achievement> _items() {
@@ -392,19 +548,19 @@ class _AchievementSectionState extends State<_AchievementSection> with TickerPro
       ),
       _Achievement(
         title: '专注 1 小时',
-        subtitle: '上周累计 ≥ 1h',
+        subtitle: '近7日累计 ≥ 1h',
         icon: Icons.timer_outlined,
         unlocked: focusHours >= 1,
       ),
       _Achievement(
         title: '专注 5 小时',
-        subtitle: '上周累计 ≥ 5h',
+        subtitle: '近7日累计 ≥ 5h',
         icon: Icons.timelapse_outlined,
         unlocked: focusHours >= 5,
       ),
       _Achievement(
         title: '心流状态',
-        subtitle: '上周累计 ≥ 20h',
+        subtitle: '近7日累计 ≥ 20h',
         icon: Icons.auto_awesome_outlined,
         unlocked: focusHours >= 20,
       ),
@@ -414,7 +570,6 @@ class _AchievementSectionState extends State<_AchievementSection> with TickerPro
   @override
   Widget build(BuildContext context) {
     final items = _items();
-    final visible = _expanded ? items : items.take(4).toList();
 
     return AppCard(
       padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
@@ -423,9 +578,9 @@ class _AchievementSectionState extends State<_AchievementSection> with TickerPro
         children: [
           InkWell(
             onTap: () => setState(() => _expanded = !_expanded),
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(10),
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
+              padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
               child: Row(
                 children: [
                   const Text(
@@ -433,20 +588,17 @@ class _AchievementSectionState extends State<_AchievementSection> with TickerPro
                     style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.onSurface),
                   ),
                   const Spacer(),
-                  AnimatedRotation(
-                    turns: _expanded ? 0.5 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: const Icon(Icons.expand_more_rounded, color: AppColors.onSurfaceVariant),
+                  Icon(
+                    _expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                    color: AppColors.onSurfaceVariant,
                   ),
                 ],
               ),
             ),
           ),
-          const SizedBox(height: 10),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 280),
-            curve: Curves.easeInOutCubic,
-            child: LayoutBuilder(
+          if (_expanded) ...[
+            const SizedBox(height: 10),
+            LayoutBuilder(
               builder: (context, c) {
                 final w = c.maxWidth;
                 final itemW = (w - 10) / 2;
@@ -454,7 +606,7 @@ class _AchievementSectionState extends State<_AchievementSection> with TickerPro
                   spacing: 10,
                   runSpacing: 10,
                   children: [
-                    for (final a in visible)
+                    for (final a in items)
                       SizedBox(
                         width: itemW,
                         child: _AchievementCard(a: a),
@@ -463,7 +615,7 @@ class _AchievementSectionState extends State<_AchievementSection> with TickerPro
                 );
               },
             ),
-          ),
+          ],
         ],
       ),
     );

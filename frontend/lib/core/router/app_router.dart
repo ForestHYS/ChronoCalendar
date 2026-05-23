@@ -15,12 +15,12 @@ import '../../features/settings/tag_manage_page.dart';
 import '../../features/shell/main_shell.dart';
 import '../../features/task_detail/task_detail_page.dart';
 import '../../features/task_list/task_list_page.dart';
+import 'shell_animated_branch_container.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'root');
 
 final goRouterProvider = Provider<GoRouter>((ref) {
-  // 监听登录态，logout/login 后重建 GoRouter，确保 redirect 与 shell 栈一致
-  ref.watch(authNotifierProvider);
+  // 仅通过 refreshListenable 响应登录态；勿 watch authNotifier，避免改昵称等操作重建路由栈
   final auth = ref.read(authNotifierProvider);
 
   return GoRouter(
@@ -44,7 +44,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/register',
         builder: (context, state) => const RegisterPage(),
       ),
-      StatefulShellRoute.indexedStack(
+      StatefulShellRoute(
+        navigatorContainerBuilder: shellAnimatedBranchContainer,
         builder: (context, state, navigationShell) {
           return MainShell(navigationShell: navigationShell);
         },
@@ -91,6 +92,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/task/new',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => TaskDetailPage(
+          key: const ValueKey<String>('task-route-new'),
           taskId: null,
           initialExtra: state.extra,
         ),
@@ -100,7 +102,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) {
           final id = state.pathParameters['id']!;
-          return TaskDetailPage(taskId: id);
+          return TaskDetailPage(
+            key: ValueKey<String>('task-route-$id'),
+            taskId: id,
+          );
         },
       ),
       GoRoute(

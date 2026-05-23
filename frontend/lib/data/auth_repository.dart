@@ -6,7 +6,6 @@ import '../core/api/auth_token_storage.dart';
 const _kEmail = 'user_email';
 const _kNickname = 'user_nickname';
 const _kUserName = 'auth_user_name';
-const _kPassword = 'user_password';
 
 class AuthRepository {
   AuthRepository(this._prefs, this._api);
@@ -26,7 +25,7 @@ class AuthRepository {
           ? _prefs.getString(_kNickname)!
           : (_prefs.getString(_kUserName) ?? '用户');
 
-  Future<void> _persistSessionFromAuthData(Map<String, dynamic> data, String email, String password) async {
+  Future<void> _persistSessionFromAuthData(Map<String, dynamic> data, String email) async {
     final access = data['access_token'] as String?;
     final refresh = data['refresh_token'] as String?;
     if (access == null || access.isEmpty) {
@@ -42,9 +41,9 @@ class AuthRepository {
       final name = user['name'] as String?;
       if (name != null && name.isNotEmpty) {
         await _prefs.setString(_kUserName, name);
+        await _prefs.setString(_kNickname, name);
       }
     }
-    await _prefs.setString(_kPassword, password);
   }
 
   Future<void> login(String email, String password) async {
@@ -60,10 +59,9 @@ class AuthRepository {
     if (data is! Map<String, dynamic>) {
       throw ArgumentError('登录响应无效');
     }
-    await _persistSessionFromAuthData(data, email, password);
+    await _persistSessionFromAuthData(data, email);
   }
 
-  /// POST /api/v1/auth/register/，成功后与登录相同写入 Token 与本地资料。
   Future<void> register({
     required String email,
     required String password,
@@ -92,27 +90,47 @@ class AuthRepository {
     if (data is! Map<String, dynamic>) {
       throw ArgumentError('注册响应无效');
     }
-    await _persistSessionFromAuthData(data, email, password);
+    await _persistSessionFromAuthData(data, email);
   }
 
+  /// PATCH /auth/me/，同步本地昵称缓存。
   Future<void> updateNickname(String nickname) async {
     final n = nickname.trim();
     if (n.isEmpty) throw ArgumentError('昵称不能为空');
-    await _prefs.setString(_kNickname, n);
+    if (n.length > 150) throw ArgumentError('昵称不能超过 150 个字符');
+    final data = await _api.request(
+      'PATCH',
+      'auth/me/',
+      body: {'name': n},
+      auth: true,
+    );
+    if (data is Map<String, dynamic>) {
+      final name = data['name'] as String? ?? n;
+      await _prefs.setString(_kNickname, name);
+      await _prefs.setString(_kUserName, name);
+    } else {
+      await _prefs.setString(_kNickname, n);
+      await _prefs.setString(_kUserName, n);
+    }
   }
 
+  /// POST /auth/change-password/，修改服务端密码。
   Future<void> changePassword({required String current, required String next}) async {
     if (current.trim().isEmpty || next.trim().isEmpty) {
       throw ArgumentError('密码不能为空');
     }
-    final saved = _prefs.getString(_kPassword);
-    if (saved != null && saved != current) {
-      throw ArgumentError('当前密码不正确');
-    }
     if (next.length < 6) {
       throw ArgumentError('新密码至少 6 位');
     }
-    await _prefs.setString(_kPassword, next);
+    await _api.request(
+      'POST',
+      'auth/change-password/',
+      body: {
+        'current_password': current,
+        'new_password': next,
+      },
+      auth: true,
+    );
   }
 
   Future<void> logout() async {
@@ -128,5 +146,7 @@ class AuthRepository {
     await _prefs.remove(AuthTokenStorage.accessTokenKey);
     await _prefs.remove(AuthTokenStorage.refreshTokenKey);
     await _prefs.remove(_kEmail);
+    await _prefs.remove(_kNickname);
+    await _prefs.remove(_kUserName);
   }
 }
