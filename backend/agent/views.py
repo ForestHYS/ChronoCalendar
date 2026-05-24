@@ -138,3 +138,40 @@ class ApprovalRejectView(APIView):
         ar.save(update_fields=["status", "decided_at"])
         return ok({"response": {"type": "message", "text": "已取消该操作。"}})
 
+
+class ConfirmPlanView(APIView):
+    """
+    用户在前端确认长期规划预览后，调用此接口批量创建所有任务。
+    请求体：{"tasks": [...]}，每条任务格式与 plan_preview.tasks 一致。
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from .tools import create_tasks_batch
+
+        tasks = request.data.get("tasks")
+        if not isinstance(tasks, list) or not tasks:
+            return err("VALIDATION_ERROR", "tasks 列表不能为空")
+        if len(tasks) > 50:
+            return err("TOO_MANY", "单次最多批量创建 50 个任务")
+
+        result = create_tasks_batch(user_id=str(request.user.id), tasks=tasks)
+
+        created_count = result["total_created"]
+        error_count = len(result["errors"])
+        if created_count == 0:
+            return err("CREATE_FAILED", "所有任务创建失败", result["errors"])
+
+        text = f"已成功创建 {created_count} 个任务！"
+        if error_count:
+            text += f"（{error_count} 个任务创建失败）"
+
+        return ok({
+            "response": {
+                "type": "message",
+                "text": text,
+                "created": result["created"],
+                "errors": result["errors"],
+            }
+        })
+

@@ -23,6 +23,7 @@ def _terminal_response(resp: Optional[dict]) -> bool:
         "open_editor",
         "query_result",
         "approval_required",
+        "plan_preview",
     )
 
 
@@ -72,8 +73,12 @@ def _decide_next(state: AgentState) -> AgentState:
         "可用工具（Skill）说明：\n"
         f"{_tool_catalog_prompt()}\n\n"
         "规则：\n"
-        "- 创建/编辑任务不能直接落库；生成草稿请用 build_task_draft，最终返回 open_editor。\n"
+        "- 创建/编辑单个任务不能直接落库；生成草稿请用 build_task_draft，最终返回 open_editor。\n"
         "- 删除任务必须使用工具 delete_task（只会创建审批请求，不会立即删除）。\n"
+        "- 若用户提出长期规划需求（如'帮我安排一周学习计划'、'规划下个月项目进度'、"
+        "'制定N天/周/月的XXX计划'），必须使用 generate_long_term_plan 工具，"
+        "并根据当前时间（now）推算 start_date 和 end_date（ISO 日期格式，如 2026-05-24）。\n"
+        "- 若用户明确说'直接添加/创建/加入日程'，则在 args 中传 create_immediately=true；否则传 false。\n"
         "- 若用户只是问候/闲聊，用 respond。\n"
         "- 若已有 last_tool（上一轮工具结果），请基于它给出最终 respond / open_editor / tool。\n"
     )
@@ -204,6 +209,51 @@ def _compose_response(state: AgentState) -> AgentState:
 
     text = state.get("input_text") or ""
     last_tool = state.get("last_tool")
+
+    # 长期规划工具的输出直接格式化，无需再过一遍 LLM
+    if isinstance(last_tool, dict) and last_tool.get("tool") == "generate_long_term_plan":
+        out = last_tool.get("output") or {}
+        if not out.get("ok"):
+            state["response"] = {
+                "type": "message",
+                "text": out.get("error") or "规划生成失败，请稍后再试。",
+            }
+            return state
+
+        conflicts = out.get("conflicts") or []
+        plan_title = out.get("plan_title") or "长期规划"
+        conflict_hint = f"（{len(conflicts)} 个时段与已有日程有冲突）" if conflicts else ""
+
+        # create_immediately=True：工具已直接落库，返回成功消息
+        if out.get("created_immediately"):
+            created_count = out.get("total_created", 0)
+            error_count = len(out.get("errors") or [])
+            state["response"] = {
+                "type": "message",
+                "text": (
+                    f"已成功将「{plan_title}」的 {created_count} 个任务添加到你的日程中！"
+                    + (f"（{error_count} 个任务创建失败）" if error_count else "")
+                ),
+                "refresh_tasks": True,
+            }
+            return state
+
+        # create_immediately=False：返回预览
+        tasks = out.get("tasks") or []
+        total = out.get("total") or len(tasks)
+        preview_hint = f"（注意：{len(conflicts)} 个任务与现有日程有冲突）" if conflicts else ""
+        state["response"] = {
+            "type": "plan_preview",
+            "plan_title": plan_title,
+            "tasks": tasks,
+            "conflicts": conflicts,
+            "message": (
+                f"已为你生成「{plan_title}」，共 {total} 个待办任务{preview_hint}。"
+                "请查看下方计划预览，确认无误后点击「创建全部任务」批量生成日程。"
+            ),
+        }
+        return state
+
     system = (
         "你是任务日历 app 的 AI 助手。你可以正常聊天。\n"
         "当 last_tool 存在时，请根据工具输出生成最终结果（严格 JSON）：\n"
@@ -234,6 +284,10 @@ def _compose_response(state: AgentState) -> AgentState:
 
 def _route_after_run(state: AgentState) -> str:
     if _terminal_response(state.get("response")):
+        return "compose"
+    # generate_long_term_plan 结果直接进 compose，不再让 LLM 二次决策
+    last_tool = state.get("last_tool") or {}
+    if last_tool.get("tool") == "generate_long_term_plan":
         return "compose"
     return "decide"
 

@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -14,8 +13,6 @@ class ApiClient {
   ApiClient(this._prefs);
 
   final SharedPreferences _prefs;
-
-  static const Duration _timeout = Duration(seconds: 20);
 
   Uri _uri(String path) {
     final p = path.startsWith('/') ? path.substring(1) : path;
@@ -88,18 +85,16 @@ class ApiClient {
       try {
         switch (method.toUpperCase()) {
           case 'GET':
-            return await http.get(uri, headers: headers).timeout(_timeout);
+            return await http.get(uri, headers: headers);
           case 'POST':
-            return await http.post(uri, headers: headers, body: encoded).timeout(_timeout);
+            return await http.post(uri, headers: headers, body: encoded);
           case 'PATCH':
-            return await http.patch(uri, headers: headers, body: encoded).timeout(_timeout);
+            return await http.patch(uri, headers: headers, body: encoded);
           case 'DELETE':
-            return await http.delete(uri, headers: headers).timeout(_timeout);
+            return await http.delete(uri, headers: headers);
           default:
             throw ApiException('不支持的 HTTP 方法: $method');
         }
-      } on TimeoutException {
-        throw ApiException('连接超时，请检查网络或确认后端服务已启动');
       } on SocketException {
         throw ApiException('无法连接服务器，请检查网络与 API 地址');
       } on http.ClientException {

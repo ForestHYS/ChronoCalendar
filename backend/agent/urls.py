@@ -24,5 +24,10 @@ urlpatterns = [
         views.ApprovalRejectView.as_view(),
         name="agent-approval-reject",
     ),
+    path(
+        "confirm-plan/",
+        views.ConfirmPlanView.as_view(),
+        name="agent-confirm-plan",
+    ),
 ]
 
