@@ -45,7 +45,16 @@ final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
     ref.read(taskRepositoryProvider),
     NotificationService.instance,
   );
-  ref.onDispose(() => scheduler.stop());
+  ref.onDispose(() {
+    // onDispose 是同步回调，stop() 是 async；不能 await，必须主动接住异常，
+    // 否则 stop 内部 await 链路上任何抛出都会变成未处理的异步错误。
+    scheduler.stop().then(
+      (_) {},
+      onError: (Object e, StackTrace st) {
+        debugPrint('reminderScheduler.stop() failed in onDispose: $e\n$st');
+      },
+    );
+  });
   return scheduler;
 });
 

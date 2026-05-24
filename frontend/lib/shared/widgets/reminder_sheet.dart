@@ -182,10 +182,7 @@ class _ActionsRow extends ConsumerWidget {
           child: FilledButton.icon(
             icon: const Icon(Icons.play_arrow_rounded, size: 20),
             label: const Text('开始专注'),
-            onPressed: () {
-              Navigator.of(sheetContext).maybePop();
-              context.push('/pomodoro/${task.id}');
-            },
+            onPressed: () => _popThenPush(context, sheetContext, '/pomodoro/${task.id}'),
           ),
         ),
         const SizedBox(width: 8),
@@ -206,10 +203,7 @@ class _ActionsRow extends ConsumerWidget {
         IconButton.filledTonal(
           tooltip: '查看详情',
           icon: const Icon(Icons.open_in_new_rounded),
-          onPressed: () {
-            Navigator.of(sheetContext).maybePop();
-            context.push('/task/${task.id}');
-          },
+          onPressed: () => _popThenPush(context, sheetContext, '/task/${task.id}'),
           style: IconButton.styleFrom(
             backgroundColor: cs.surfaceContainerHighest,
           ),
@@ -276,4 +270,14 @@ Future<void> _runAndClose(
     if (!sheetCtx.mounted) return;
     await showAppErrorDialog(sheetCtx, error: e, title: failureTitle);
   }
+}
+
+/// 先关 sheet 再 push 路由：
+/// 必须在 [Navigator.maybePop] 之前先取出 [GoRouter] 引用——pop 之后 [ctx] 的
+/// element 会被 deactivated，再用它查 InheritedWidget 会触发
+/// "Looking up a deactivated widget's ancestor" 异常。
+void _popThenPush(BuildContext ctx, BuildContext sheetCtx, String location) {
+  final router = GoRouter.of(ctx);
+  Navigator.of(sheetCtx).maybePop();
+  router.push(location);
 }

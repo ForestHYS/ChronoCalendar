@@ -31,6 +31,12 @@ class ReminderScheduler with WidgetsBindingObserver {
   bool _started = false;
   AppLifecycleState _lifecycle = AppLifecycleState.resumed;
 
+  /// 当前进行中的 `_doSync` future；null 表示空闲。用于单飞合并并发触发。
+  Future<void>? _syncing;
+
+  /// 在已有 sync 跑的时候又收到通知 → 标记 dirty，等当前完成后补跑一次。
+  bool _syncDirty = false;
+
   /// 启动：注册 listener、立即做一次同步。
   void start() {
     if (_started) return;
@@ -52,6 +58,15 @@ class ReminderScheduler with WidgetsBindingObserver {
     _tapSub = null;
     _foregroundTimer?.cancel();
     _foregroundTimer = null;
+    // 等飞行中的 _doSync 通过 _started 守卫退出，避免在 cancelAll 之后又写入 _scheduled
+    final pending = _syncing;
+    if (pending != null) {
+      try {
+        await pending;
+      } catch (_) {}
+    }
+    _syncing = null;
+    _syncDirty = false;
     _scheduled.clear();
     _recentlyShown.clear();
     await _notifications.cancelAll();
@@ -68,22 +83,41 @@ class ReminderScheduler with WidgetsBindingObserver {
 
   void _onTasksChanged() => _sync();
 
-  /// 通知被点击：导航到任务详情。
+  /// 通知被点击：弹半屏 [ReminderSheet]（与到点前台触发的行为保持一致）。
   ///
-  /// 冷启动（app 未启动时点开通知）由 `app.dart` 中读 `launchTaskId` 处理，这里不重复。
-  /// 这里覆盖的是：app 在后台被点开 / 在前台时点击通知抽屉中的旧条目。
+  /// 冷启动（app 进程未启动时点开通知）由 `app.dart` 中读 `launchTaskId` 后
+  /// 直接 push 任务详情；这里覆盖的是 app 在后台被点开 / 在前台时点击通知抽屉中
+  /// 的旧条目这两种「app 已在运行」的场景。
   void _onNotificationTapped(String taskId) {
     final t = _repo.taskById(taskId);
     if (t == null) return;
     _showSheet(t);
   }
 
-  /// 主同步流程：
-  /// 1. 取消已不再有效的任务通知。
-  /// 2. 为新增/变更的任务安排系统通知。
-  /// 3. 处理「刚刚过去」的提醒（前台立即弹）。
-  /// 4. 重置前台 Timer。
-  Future<void> _sync() async {
+  /// 主同步流程入口：单飞合并并发调用。
+  ///
+  /// 并发触发（如 bootstrap 批量写入连续多次 notifyListeners）时：
+  /// - 第一次启动 [_doSync]
+  /// - 期间到来的 sync 请求只标记 dirty
+  /// - 第一份完成后，若还活着且 dirty，再跑一次（合并为「当前 + 一次补跑」）
+  Future<void> _sync() {
+    if (_syncing != null) {
+      _syncDirty = true;
+      return _syncing!;
+    }
+    final f = _doSync().whenComplete(() {
+      _syncing = null;
+      if (_started && _syncDirty) {
+        _syncDirty = false;
+        _sync();
+      }
+    });
+    _syncing = f;
+    return f;
+  }
+
+  /// 真正的同步实现。每次 await 后用 `_started` 守卫，避免 [stop] 后再写入状态。
+  Future<void> _doSync() async {
     final now = DateTime.now();
     final wanted = <String, DateTime>{};
     final justPast = <Task>[]; // remindAt 在过去 30 秒内、状态仍活跃 → 立即弹 sheet
@@ -118,19 +152,20 @@ class ReminderScheduler with WidgetsBindingObserver {
     final toCancel = <String>[];
     for (final entry in _scheduled.entries) {
       final w = wanted[entry.key];
-      if (w == null || !_dtEq(w, entry.value)) {
+      if (w == null || w != entry.value) {
         toCancel.add(entry.key);
       }
     }
     for (final id in toCancel) {
       await _notifications.cancelTaskReminder(id);
+      if (!_started) return;
       _scheduled.remove(id);
     }
 
     // 新增/重排
     for (final entry in wanted.entries) {
       final prev = _scheduled[entry.key];
-      if (prev != null && _dtEq(prev, entry.value)) continue;
+      if (prev != null && prev == entry.value) continue;
       final t = _repo.taskById(entry.key);
       if (t == null) continue;
       await _notifications.scheduleTaskReminder(
@@ -139,21 +174,19 @@ class ReminderScheduler with WidgetsBindingObserver {
         body: _bodyFor(t),
         when: entry.value,
       );
+      if (!_started) return;
       _scheduled[entry.key] = entry.value;
     }
 
     // 处理「刚刚过去」的：在前台立即弹 sheet（避免「设了一个 1 分钟内的提醒」却没反应的常见困惑）
-    if (_lifecycle == AppLifecycleState.resumed) {
+    if (_started && _lifecycle == AppLifecycleState.resumed) {
       for (final t in justPast) {
         _showSheet(t);
       }
     }
 
-    _rescheduleForegroundTimer();
+    if (_started) _rescheduleForegroundTimer();
   }
-
-  bool _dtEq(DateTime a, DateTime b) =>
-      a.millisecondsSinceEpoch == b.millisecondsSinceEpoch;
 
   String _bodyFor(Task t) {
     switch (t.type) {

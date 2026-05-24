@@ -21,12 +21,13 @@ class CalendarApp extends ConsumerStatefulWidget {
 class _CalendarAppState extends ConsumerState<CalendarApp> {
   bool _schedulerStarted = false;
   bool _consumedLaunchPayload = false;
+  ProviderSubscription<bool>? _authSub;
 
   @override
   void initState() {
     super.initState();
     // 监听登录态：登录后启动 scheduler，登出时停止。
-    ref.listenManual<bool>(
+    _authSub = ref.listenManual<bool>(
       authNotifierProvider.select((a) => a.isLoggedIn),
       (prev, next) {
         if (next) {
@@ -46,6 +47,18 @@ class _CalendarAppState extends ConsumerState<CalendarApp> {
       } catch (_) {}
       await _onLoggedIn();
     });
+  }
+
+  @override
+  void dispose() {
+    _authSub?.close();
+    _authSub = null;
+    if (_schedulerStarted) {
+      // 兜底：根 widget 正常情况下与进程同寿，但热重启 / 测试场景下也可能 dispose
+      unawaited(ref.read(reminderSchedulerProvider).stop());
+      _schedulerStarted = false;
+    }
+    super.dispose();
   }
 
   Future<void> _onLoggedIn() async {
