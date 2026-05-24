@@ -19,6 +19,9 @@ import 'shell_animated_branch_container.dart';
 
 final _rootNavigatorKey = GlobalKey<NavigatorState>(debugLabel: 'root');
 
+/// 暴露根 Navigator key，供 ReminderScheduler 等全局服务弹出对话框/sheet 使用。
+GlobalKey<NavigatorState> get rootNavigatorKey => _rootNavigatorKey;
+
 final goRouterProvider = Provider<GoRouter>((ref) {
   // 仅通过 refreshListenable 响应登录态；勿 watch authNotifier，避免改昵称等操作重建路由栈
   final auth = ref.read(authNotifierProvider);
