@@ -27,6 +27,7 @@ class ReminderScheduler with WidgetsBindingObserver {
   final Map<String, DateTime> _recentlyShown = {};
 
   Timer? _foregroundTimer;
+  StreamSubscription<String>? _tapSub;
   bool _started = false;
   AppLifecycleState _lifecycle = AppLifecycleState.resumed;
 
@@ -37,7 +38,7 @@ class ReminderScheduler with WidgetsBindingObserver {
     debugPrint('[Reminder] scheduler start (tasks=${_repo.tasks.length})');
     WidgetsBinding.instance.addObserver(this);
     _repo.addListener(_onTasksChanged);
-    _notifications.onNotificationTapped.listen(_onNotificationTapped);
+    _tapSub = _notifications.onNotificationTapped.listen(_onNotificationTapped);
     _sync();
   }
 
@@ -47,6 +48,8 @@ class ReminderScheduler with WidgetsBindingObserver {
     _started = false;
     WidgetsBinding.instance.removeObserver(this);
     _repo.removeListener(_onTasksChanged);
+    await _tapSub?.cancel();
+    _tapSub = null;
     _foregroundTimer?.cancel();
     _foregroundTimer = null;
     _scheduled.clear();
@@ -66,18 +69,13 @@ class ReminderScheduler with WidgetsBindingObserver {
   void _onTasksChanged() => _sync();
 
   /// 通知被点击：导航到任务详情。
+  ///
+  /// 冷启动（app 未启动时点开通知）由 `app.dart` 中读 `launchTaskId` 处理，这里不重复。
+  /// 这里覆盖的是：app 在后台被点开 / 在前台时点击通知抽屉中的旧条目。
   void _onNotificationTapped(String taskId) {
-    final ctx = rootNavigatorKey.currentContext;
-    if (ctx == null) return;
     final t = _repo.taskById(taskId);
     if (t == null) return;
-    // 点击通知时若 app 已在前台，弹半屏 sheet；否则进入任务详情。
-    if (_lifecycle == AppLifecycleState.resumed) {
-      _showSheet(t);
-    } else {
-      // 冷启动后由 app.dart 中的 launchTaskId 流程处理；这里仅前台/后台切换的情况兜底
-      _showSheet(t);
-    }
+    _showSheet(t);
   }
 
   /// 主同步流程：

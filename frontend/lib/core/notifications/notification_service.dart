@@ -16,7 +16,11 @@ class NotificationService {
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
-  bool _initialized = false;
+  /// 首次 [init] 调用返回的 Future，并发的后续调用都 await 这个，避免重复初始化。
+  Future<void>? _initFuture;
+
+  /// 真正初始化完成后才置为 true。其他方法据此判定是否可安全调用 plugin。
+  bool _ready = false;
 
   /// 通知被点击时回调（携带任务 id）。
   final StreamController<String> _tapStream =
@@ -30,17 +34,17 @@ class NotificationService {
   static const _channelName = '任务提醒';
   static const _channelDesc = '任务到达设定提醒时间时的通知';
 
-  /// 在 `main()` 中 `runApp` 之前调用。
-  Future<void> init() async {
-    if (_initialized) return;
-    _initialized = true;
+  /// 在 `main()` 中 `runApp` 之前调用。并发/重复调用安全（共享同一个 Future）。
+  Future<void> init() => _initFuture ??= _doInit();
 
+  Future<void> _doInit() async {
     tzdata.initializeTimeZones();
     // 应用 locale 为 zh_CN，默认使用上海时区；如需精准 DST 可后续接入 flutter_native_timezone。
     try {
       tz.setLocalLocation(tz.getLocation('Asia/Shanghai'));
-    } catch (_) {
+    } catch (e) {
       // 时区库缺失时退化使用 UTC，仍可调度但展示时间可能偏差
+      debugPrint('[Notif] setLocalLocation failed: $e');
     }
     debugPrint('[Notif] init begin, tz=${tz.local.name}');
 
@@ -74,13 +78,14 @@ class NotificationService {
     if (details?.didNotificationLaunchApp ?? false) {
       launchTaskId = details?.notificationResponse?.payload;
     }
+    _ready = true;
     debugPrint('[Notif] init done');
   }
 
   /// 申请运行时权限：通知（Android 13+）+ 精确闹钟（Android 12+）。
   /// 在用户首次进入需要提醒的页面时调用（例如首次启用提醒、登录后）。
   Future<bool> requestPermissions() async {
-    if (!_initialized) return false;
+    if (!_ready) return false;
     bool granted = true;
 
     // Android 13+ POST_NOTIFICATIONS
@@ -115,7 +120,7 @@ class NotificationService {
     required String body,
     required DateTime when,
   }) async {
-    if (!_initialized) {
+    if (!_ready) {
       debugPrint('[Notif] schedule skipped: not initialized ($taskId)');
       return;
     }
@@ -176,18 +181,22 @@ class NotificationService {
 
   /// 取消某任务的提醒。
   Future<void> cancelTaskReminder(String taskId) async {
-    if (!_initialized) return;
+    if (!_ready) return;
     try {
       await _plugin.cancel(_idFromTaskId(taskId));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Notif] cancel($taskId) failed: $e');
+    }
   }
 
   /// 取消全部（登出时调用）。
   Future<void> cancelAll() async {
-    if (!_initialized) return;
+    if (!_ready) return;
     try {
       await _plugin.cancelAll();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[Notif] cancelAll failed: $e');
+    }
   }
 
   void _handleResponse(NotificationResponse response) {

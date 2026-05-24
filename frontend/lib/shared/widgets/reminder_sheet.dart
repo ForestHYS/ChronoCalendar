@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 
+import '../../core/ui/app_error_dialog.dart';
 import '../../data/providers.dart';
 import '../../domain/models/task.dart';
 import '../../domain/models/task_status.dart';
@@ -22,7 +23,7 @@ class ReminderSheet extends ConsumerWidget {
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      barrierColor: Colors.black.withOpacity(0.45),
+      barrierColor: Colors.black.withValues(alpha: 0.45),
       builder: (ctx) => FractionallySizedBox(
         heightFactor: 0.5,
         child: ReminderSheet(task: task),
@@ -193,12 +194,11 @@ class _ActionsRow extends ConsumerWidget {
             icon: const Icon(Icons.check_rounded, size: 20),
             label: const Text('标记完成'),
             onPressed: canComplete
-                ? () async {
-                    Navigator.of(sheetContext).maybePop();
-                    try {
-                      await ref.read(taskRepositoryProvider).completeTask(task.id);
-                    } catch (_) {}
-                  }
+                ? () => _runAndClose(
+                      sheetContext,
+                      () => ref.read(taskRepositoryProvider).completeTask(task.id),
+                      failureTitle: '标记完成失败',
+                    )
                 : null,
           ),
         ),
@@ -248,10 +248,32 @@ class _SnoozeRow extends ConsumerWidget {
   }
 
   Future<void> _snooze(BuildContext context, WidgetRef ref, Duration d) async {
-    Navigator.of(sheetContext).maybePop();
     final next = task.copyWith(remindAt: DateTime.now().add(d));
-    try {
-      await ref.read(taskRepositoryProvider).updateTask(next);
-    } catch (_) {}
+    await _runAndClose(
+      sheetContext,
+      () => ref.read(taskRepositoryProvider).updateTask(next),
+      failureTitle: '稍后提醒设置失败',
+    );
+  }
+}
+
+/// 跑一段会调用网络的操作：
+/// - 成功 → pop 当前 sheet
+/// - 失败 → 保持 sheet 在屏幕上，弹出 [showAppErrorDialog] 提示用户，便于直接重试
+///
+/// 注意 `sheetCtx` 必须是 sheet 内的 BuildContext。每次跨 await 前都校验 `mounted`，
+/// 避免页面被其它流程提前 pop 造成 "Looking up a deactivated widget" 异常。
+Future<void> _runAndClose(
+  BuildContext sheetCtx,
+  Future<void> Function() op, {
+  required String failureTitle,
+}) async {
+  try {
+    await op();
+    if (!sheetCtx.mounted) return;
+    Navigator.of(sheetCtx).maybePop();
+  } catch (e) {
+    if (!sheetCtx.mounted) return;
+    await showAppErrorDialog(sheetCtx, error: e, title: failureTitle);
   }
 }
