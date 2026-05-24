@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/api/api_client.dart';
+import '../core/notifications/notification_service.dart';
+import '../core/notifications/reminder_scheduler.dart';
 import 'auth_repository.dart';
 import 'agent_repository.dart';
 import 'pomodoro_settings_repository.dart';
@@ -30,6 +32,30 @@ final taskRepositoryProvider = ChangeNotifierProvider<TaskRepository>((ref) {
 
 final agentRepositoryProvider = Provider<AgentRepository>((ref) {
   return AgentRepository(ref.watch(apiClientProvider));
+});
+
+/// 全局唯一的提醒调度器。由 [CalendarApp] 在登录态变化时 start/stop。
+///
+/// 必须用 `ref.read` 而非 `ref.watch`：[taskRepositoryProvider] 是
+/// `ChangeNotifierProvider`，每次 repo `notifyListeners()` 都会让 watch 它的 provider
+/// 重建。一旦重建，旧 scheduler 被 dispose（listener 被摘掉），新 scheduler 从未
+/// 调用过 `start()`，整个调度链就此断掉。
+final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
+  final scheduler = ReminderScheduler(
+    ref.read(taskRepositoryProvider),
+    NotificationService.instance,
+  );
+  ref.onDispose(() {
+    // onDispose 是同步回调，stop() 是 async；不能 await，必须主动接住异常，
+    // 否则 stop 内部 await 链路上任何抛出都会变成未处理的异步错误。
+    scheduler.stop().then(
+      (_) {},
+      onError: (Object e, StackTrace st) {
+        debugPrint('reminderScheduler.stop() failed in onDispose: $e\n$st');
+      },
+    );
+  });
+  return scheduler;
 });
 
 class AuthNotifier extends ChangeNotifier {
