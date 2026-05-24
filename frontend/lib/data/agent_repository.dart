@@ -87,4 +87,21 @@ class AgentRepository {
     }
     throw StateError('拒绝失败');
   }
+
+  /// 用户确认长期规划预览后，批量创建所有任务。
+  Future<Map<String, dynamic>> confirmPlan(
+    List<Map<String, dynamic>> tasks,
+  ) async {
+    final data = await _api.request(
+      'POST',
+      'agent/confirm-plan/',
+      body: {'tasks': tasks},
+      auth: true,
+    );
+    if (data is Map<String, dynamic>) {
+      final resp = data['response'];
+      if (resp is Map<String, dynamic>) return resp;
+    }
+    throw StateError('确认计划失败');
+  }
 }

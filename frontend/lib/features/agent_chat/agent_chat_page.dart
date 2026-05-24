@@ -107,6 +107,10 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
       setState(() {
         _items.add(_ChatItem.assistant(resp));
       });
+      // 后端标记了任务已直接创建（create_immediately=true），立即刷新本地任务缓存
+      if (resp['refresh_tasks'] == true) {
+        ref.read(taskRepositoryProvider).refreshTasks();
+      }
       _scrollToBottom();
     } catch (e) {
       if (mounted) await showAppErrorDialog(context, title: '发送失败', error: e);
@@ -568,6 +572,162 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                   const Text(
                     '未找到匹配任务',
                     style: TextStyle(color: AppColors.onSurfaceVariant),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (type == 'plan_preview') {
+      final planTitle = payload['plan_title'] as String? ?? '长期规划';
+      final message = payload['message'] as String? ?? '';
+      final tasks = payload['tasks'];
+      final taskList = (tasks is List)
+          ? tasks.whereType<Map<String, dynamic>>().toList()
+          : <Map<String, dynamic>>[];
+      return ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 380),
+        child: Card(
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  planTitle,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                if (message.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    message,
+                    style: const TextStyle(color: AppColors.onSurfaceVariant),
+                  ),
+                ],
+                if (taskList.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  ...taskList.take(12).map((t) {
+                    final title = t['title'] as String? ?? '';
+                    final subtasks = t['subtasks'];
+                    final subtaskCount = (subtasks is List)
+                        ? subtasks.length
+                        : 0;
+                    final dueAt = t['due_at'] as String?;
+                    final dueLabel = dueAt != null
+                        ? dueAt.substring(0, 10) // 只显示日期部分
+                        : null;
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Padding(
+                            padding: EdgeInsets.only(top: 2),
+                            child: Icon(
+                              Icons.check_box_outline_blank,
+                              size: 16,
+                              color: AppColors.onSurfaceVariant,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  title,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                Row(
+                                  children: [
+                                    if (dueLabel != null)
+                                      Text(
+                                        dueLabel,
+                                        style: const TextStyle(
+                                          color: AppColors.onSurfaceVariant,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    if (dueLabel != null && subtaskCount > 0)
+                                      const Text(
+                                        ' · ',
+                                        style: TextStyle(
+                                          color: AppColors.onSurfaceVariant,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    if (subtaskCount > 0)
+                                      Text(
+                                        '$subtaskCount 个子任务',
+                                        style: const TextStyle(
+                                          color: AppColors.onSurfaceVariant,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  if (taskList.length > 12)
+                    Text(
+                      '… 共 ${taskList.length} 个待办任务',
+                      style: const TextStyle(
+                        color: AppColors.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+                const SizedBox(height: 12),
+                if (_submitted)
+                  const Row(
+                    children: [
+                      Icon(
+                        Icons.check_circle_outline,
+                        size: 16,
+                        color: AppColors.onSurfaceVariant,
+                      ),
+                      SizedBox(width: 6),
+                      Text(
+                        '已创建到日程',
+                        style: TextStyle(color: AppColors.onSurfaceVariant),
+                      ),
+                    ],
+                  )
+                else
+                  FilledButton(
+                    onPressed: taskList.isEmpty
+                        ? null
+                        : () async {
+                            try {
+                              final r = await ref
+                                  .read(agentRepositoryProvider)
+                                  .confirmPlan(taskList);
+                              // 创建完成后立即刷新任务列表
+                              await ref
+                                  .read(taskRepositoryProvider)
+                                  .refreshTasks();
+                              setState(() => _submitted = true);
+                              widget.onFollowUp(r);
+                            } catch (e) {
+                              if (context.mounted) {
+                                await showAppErrorDialog(
+                                  context,
+                                  title: '创建失败',
+                                  error: e,
+                                );
+                              }
+                            }
+                          },
+                    child: const Text('创建全部任务'),
                   ),
               ],
             ),
