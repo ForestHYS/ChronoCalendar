@@ -116,6 +116,7 @@ CORS_ALLOW_ALL_ORIGINS = True  # 开发用；生产请改为 CORS_ALLOWED_ORIGIN
 # ------------------------------------------------------------------ #
 # 注意：请勿将真实 key 提交到 git。推荐在本机用一个不入库的私有文件覆盖本变量，
 # 或者使用你的部署系统注入 settings（但 agent/llm.py 不会直接读取环境变量）。
-AGENT_LLM_BASE_URL = "https://jeniya.top/v1"
-AGENT_LLM_API_KEY = "sk-2rkBuEmwGcu0WJ7fLdC7rSGELr1JBYCN38c145waQa7A6G0T"  # 为空表示禁用 LLM（会走规则降级）
+# 运行时优先使用用户在设置页保存的配置；此处留空表示默认禁用 LLM。
+AGENT_LLM_BASE_URL = ""
+AGENT_LLM_API_KEY = ""  # 为空表示禁用 LLM（会走规则降级）
 AGENT_LLM_MODEL = "gpt-5"
