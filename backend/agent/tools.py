@@ -207,7 +207,7 @@ def generate_long_term_plan(
         "now": timezone.now().isoformat(),
     }
 
-    result = call_llm_json(system=system, user=str(user_msg))
+    result = call_llm_json(system=system, user=str(user_msg), user_id=user_id)
     if not result.ok or not result.data:
         return {"ok": False, "error": "LLM 规划生成失败，请检查 LLM 配置。"}
 

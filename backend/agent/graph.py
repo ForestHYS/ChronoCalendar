@@ -88,12 +88,12 @@ def _decide_next(state: AgentState) -> AgentState:
         "user_input": text,
         "last_tool": last_tool,
     }
-    r = call_llm_json(system=system, user=str(user))
+    r = call_llm_json(system=system, user=str(user), user_id=state.get("user_id"))
     if not r.ok or not r.data:
         logger.warning("LLM unavailable for decide_next: %s", r.error)
         state["response"] = {
             "type": "message",
-            "text": "AI 未接入或配置无效，无法处理你的请求。请检查 LLM 配置（AGENT_LLM_*）。",
+            "text": "AI 未接入或配置无效，无法处理你的请求。请在设置页填写 AI 地址与 API Key。",
         }
         return state
 
@@ -265,7 +265,7 @@ def _compose_response(state: AgentState) -> AgentState:
         "必须输出严格 JSON 对象。"
     )
     user = {"user_input": text, "last_tool": last_tool}
-    r = call_llm_json(system=system, user=str(user))
+    r = call_llm_json(system=system, user=str(user), user_id=state.get("user_id"))
     if not r.ok or not r.data:
         logger.warning("LLM unavailable for compose_response: %s", r.error)
         state["response"] = {"type": "message", "text": "AI 生成回复失败，请稍后再试。"}

@@ -119,6 +119,13 @@ class SettingsPage extends ConsumerWidget {
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () => context.push('/settings/pomodoro'),
                 ),
+                const Divider(height: 1, color: AppColors.outline),
+                ListTile(
+                  leading: const Icon(Icons.smart_toy_outlined),
+                  title: const Text('AI 配置'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => context.push('/settings/ai'),
+                ),
               ],
             ),
           ),

@@ -29,5 +29,15 @@ urlpatterns = [
         views.ConfirmPlanView.as_view(),
         name="agent-confirm-plan",
     ),
+    path(
+        "llm-config/",
+        views.UserLlmConfigView.as_view(),
+        name="agent-llm-config",
+    ),
+    path(
+        "llm-test/",
+        views.UserLlmConfigTestView.as_view(),
+        name="agent-llm-test",
+    ),
 ]
 

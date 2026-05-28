@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/api/api_client.dart';
 import '../core/notifications/notification_service.dart';
 import '../core/notifications/reminder_scheduler.dart';
+import 'ai_settings_repository.dart';
 import 'auth_repository.dart';
 import 'agent_repository.dart';
 import 'pomodoro_settings_repository.dart';
@@ -32,6 +33,10 @@ final taskRepositoryProvider = ChangeNotifierProvider<TaskRepository>((ref) {
 
 final agentRepositoryProvider = Provider<AgentRepository>((ref) {
   return AgentRepository(ref.watch(apiClientProvider));
+});
+
+final aiSettingsRepositoryProvider = Provider<AiSettingsRepository>((ref) {
+  return AiSettingsRepository(ref.watch(apiClientProvider));
 });
 
 /// 全局唯一的提醒调度器。由 [CalendarApp] 在登录态变化时 start/stop。
