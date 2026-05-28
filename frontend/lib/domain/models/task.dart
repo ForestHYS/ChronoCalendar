@@ -41,6 +41,7 @@ class Task {
     this.focusTotalSeconds = 0,
     this.subtasks = const [],
     required this.lastActivityAt,
+    this.completedAt,
     this.completedAtWeekYear,
   });
 
@@ -58,6 +59,7 @@ class Task {
   final int focusTotalSeconds;
   final List<Subtask> subtasks;
   final DateTime lastActivityAt;
+  final DateTime? completedAt;
 
   /// 用于统计「本周完成」：完成时记录所属 ISO week-year
   final int? completedAtWeekYear;
@@ -92,12 +94,14 @@ class Task {
     int? focusTotalSeconds,
     List<Subtask>? subtasks,
     DateTime? lastActivityAt,
+    DateTime? completedAt,
     int? completedAtWeekYear,
     bool clearDueAt = false,
     bool clearRemindAt = false,
     bool clearStartAt = false,
     bool clearEndAt = false,
     bool clearExpectedMinutes = false,
+    bool clearCompletedAt = false,
   }) {
     return Task(
       id: id,
@@ -114,6 +118,7 @@ class Task {
       focusTotalSeconds: focusTotalSeconds ?? this.focusTotalSeconds,
       subtasks: subtasks ?? this.subtasks,
       lastActivityAt: lastActivityAt ?? this.lastActivityAt,
+      completedAt: clearCompletedAt ? null : (completedAt ?? this.completedAt),
       completedAtWeekYear: completedAtWeekYear ?? this.completedAtWeekYear,
     );
   }

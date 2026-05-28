@@ -8,6 +8,7 @@ import '../../data/task_repository.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/models/task_status.dart';
+import '../../shared/widgets/app_empty_state.dart';
 import 'widgets/task_category_rail.dart';
 import 'widgets/task_filter_sort_sheet.dart';
 import 'widgets/task_filter_state.dart';
@@ -156,7 +157,17 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                 ),
                 Expanded(
                   child: tasks.isEmpty
-                      ? const _EmptyState()
+                      ? AppEmptyState(
+                          icon: _searchQuery.isNotEmpty || _filter.hasActiveFilters || _category != null
+                              ? Icons.search_off_outlined
+                              : Icons.task_alt_outlined,
+                          message: _searchQuery.isNotEmpty || _filter.hasActiveFilters || _category != null
+                              ? '没有匹配的任务'
+                              : '还没有任务',
+                          subtitle: _searchQuery.isNotEmpty || _filter.hasActiveFilters || _category != null
+                              ? '试试调整搜索关键词或筛选条件。'
+                              : '点击底部 + 创建你的第一个任务。',
+                        )
                       : ListView.builder(
                           padding: const EdgeInsets.fromLTRB(12, 12, 12, 96),
                           itemCount: tasks.length,
@@ -166,8 +177,8 @@ class _TaskListPageState extends ConsumerState<TaskListPage> {
                               task: t,
                               tags: _tagsFor(repo, t),
                               onTap: () {
-                                repo.touchTask(t.id);
                                 context.push('/task/${t.id}');
+                                repo.touchTaskAfterNavigation(t.id);
                               },
                             );
                           },
@@ -212,30 +223,6 @@ class _FilterButton extends StatelessWidget {
             ),
           ),
       ],
-    );
-  }
-}
-
-class _EmptyState extends StatelessWidget {
-  const _EmptyState();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Padding(
-        padding: EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.inbox_outlined, size: 56, color: AppColors.onSurfaceVariant),
-            SizedBox(height: 8),
-            Text(
-              '没有匹配的任务',
-              style: TextStyle(color: AppColors.onSurfaceVariant),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

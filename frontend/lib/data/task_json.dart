@@ -70,6 +70,7 @@ Task taskFromJson(Map<String, dynamic> j) {
     focusTotalSeconds: (j['focus_total_seconds'] as num?)?.round() ?? 0,
     subtasks: subs,
     lastActivityAt: lastAct,
+    completedAt: completedAt,
     completedAtWeekYear: completedAt != null ? weekKeyFor(completedAt) : null,
   );
 }

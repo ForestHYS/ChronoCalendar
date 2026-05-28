@@ -7,6 +7,7 @@ import '../../domain/models/task.dart';
 import '../../domain/models/task_status.dart';
 import '../../shared/widgets/reminder_sheet.dart';
 import '../router/app_router.dart';
+import '../utils/haptics.dart';
 import 'notification_service.dart';
 
 /// 监听 [TaskRepository]：
@@ -273,6 +274,7 @@ class ReminderScheduler with WidgetsBindingObserver {
     }
     _recentlyShown[task.id] = now;
     debugPrint('[Reminder] showSheet task=${task.id} title=${task.title}');
+    hapticReminderTriggered();
     // 用 microtask 避开当前帧 build / 通知回调栈
     Future.microtask(() {
       final c = rootNavigatorKey.currentContext;

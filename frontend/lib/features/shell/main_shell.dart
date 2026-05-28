@@ -65,6 +65,9 @@ class _MainShellState extends ConsumerState<MainShell> with SingleTickerProvider
     if (current == index) return;
     ref.read(shellNavDirectionProvider.notifier).state = index > current ? 1 : -1;
     widget.navigationShell.goBranch(index);
+    if (index == 0) {
+      ref.read(homeTabReselectedProvider.notifier).state++;
+    }
   }
 
   /// 各 Tab 中心 x（与 Row 中四个 [Expanded] + 中间 [SizedBox(width: 72)] 一致）。
