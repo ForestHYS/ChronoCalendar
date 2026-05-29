@@ -19,6 +19,20 @@ def skills_prompt_lines() -> List[str]:
     return lines
 
 
+def skills_prompt_for(names: List[str]) -> str:
+    """仅输出指定 Skill 的说明（用于拆分后的专项 prompt）。"""
+    allowed = set(names)
+    lines = []
+    for s in iter_skills():
+        if s.name not in allowed:
+            continue
+        ap = "需要人工批准后执行" if s.requires_approval else "可直接执行"
+        lines.append(f"- {s.name}: {s.description}（风险={s.risk}，{ap}）")
+        if s.args_hint:
+            lines.append(f"  参数: {s.args_hint}")
+    return "\n".join(lines)
+
+
 @dataclass(frozen=True)
 class Skill:
     name: str
@@ -30,7 +44,8 @@ class Skill:
 
 
 def _run_search_tasks(user_id: str, **kw: Any) -> dict:
-    return tools.search_tasks(user_id=user_id, **kw)
+    ctx = kw.pop("client_context", None)
+    return tools.search_tasks(user_id=user_id, client_context=ctx, **kw)
 
 
 def _run_build_draft(user_id: str, **kw: Any) -> dict:
@@ -47,25 +62,48 @@ def _run_delete_task(user_id: str, **kw: Any) -> dict:
 
 
 def _run_generate_plan(user_id: str, **kw: Any) -> dict:
-    return tools.generate_long_term_plan(user_id=user_id, **kw)
+    ctx = kw.pop("client_context", None)
+    return tools.generate_long_term_plan(user_id=user_id, client_context=ctx, **kw)
 
 
 def _validate_search_tasks(args: dict) -> dict:
+    rf = str(args.get("range_from") or "").strip()
+    rt = str(args.get("range_to") or "").strip()
+    if bool(rf) != bool(rt):
+        raise ValueError("range_from 与 range_to 须同时提供或同时省略")
+    try:
+        limit = int(args.get("limit") or 20)
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(limit, 50))
     return {
         "q": str(args.get("q") or ""),
         "task_type": args.get("task_type"),
-        "limit": int(args.get("limit") or 10),
+        "limit": limit,
+        "range_from": rf or None,
+        "range_to": rt or None,
     }
 
 
 def _validate_build_draft(args: dict) -> dict:
+    tt = str(args.get("task_type") or "").strip().lower()
+    if tt not in ("block", "ddl", "todo"):
+        raise ValueError("task_type 必填，且须为 block、ddl 或 todo 之一")
+    em = args.get("expected_minutes")
+    try:
+        em_val = int(em) if em is not None else None
+    except (TypeError, ValueError):
+        em_val = None
+    subs = args.get("subtasks")
     return {
-        "task_type": str(args.get("task_type") or "block"),
+        "task_type": tt,
         "title": str(args.get("title") or "新任务"),
         "description": str(args.get("description") or ""),
         "start_at": args.get("start_at"),
         "end_at": args.get("end_at"),
         "due_at": args.get("due_at"),
+        "expected_minutes": em_val,
+        "subtasks": subs if isinstance(subs, list) else None,
         "tag_ids": args.get("tag_ids") if isinstance(args.get("tag_ids"), list) else [],
     }
 
@@ -110,18 +148,32 @@ def _validate_generate_plan(args: dict) -> dict:
 SKILLS: Dict[str, Skill] = {
     "search_tasks": Skill(
         name="search_tasks",
-        description="按标题关键词与类型搜索当前用户的任务列表",
+        description=(
+            "查询/搜索/列出用户任务。支持标题 q、类型 task_type、时间区间 range_from+range_to（ISO8601，须成对）。"
+            "用户问「明天/今天/某天有什么任务」必须传 range_from/range_to（可用 user_payload 里 calendar_hints）；"
+            "无匹配时 items 为空，勿改用无 range 查询凑数。结果含 id，前端展示「查看详情」。"
+        ),
         risk="low",
         requires_approval=False,
-        args_hint='{"q":"关键词","task_type":"block|ddl|todo|null","limit":10}',
+        args_hint=(
+            '{"q":"标题关键词，可空","task_type":"block|ddl|todo|null",'
+            '"range_from":"区间起点ISO","range_to":"区间终点ISO","limit":20}'
+        ),
         handler=_run_search_tasks,
     ),
     "build_task_draft": Skill(
         name="build_task_draft",
-        description="生成单个任务草稿（不落库），用于打开编辑页让用户确认保存",
+        description=(
+            "创建单个任务草稿（不落库），type 必为 block|ddl|todo 之一，按任务语义选型（见系统说明）。"
+            "block 需 start_at+end_at；ddl 需 due_at；todo 可 due_at、expected_minutes、subtasks。"
+            "完成后应 open_editor 展示草稿，勿默认一律 block。"
+        ),
         risk="low",
         requires_approval=False,
-        args_hint='{"task_type","title","description","start_at","end_at","due_at","tag_ids"}',
+        args_hint=(
+            '{"task_type":"block|ddl|todo","title","description",'
+            '"start_at","end_at","due_at","expected_minutes","subtasks":[{"title":"..."}],"tag_ids"}'
+        ),
         handler=_run_build_draft,
     ),
     "check_block_conflict": Skill(
@@ -186,7 +238,10 @@ def run_skill(skill_name: str, user_id: str, raw_args: dict) -> dict:
         args = normalize_args(skill_name, raw_args)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
+    ctx = raw_args.get("client_context") if isinstance(raw_args.get("client_context"), dict) else None
     try:
+        if skill_name in ("generate_long_term_plan", "search_tasks") and ctx is not None:
+            return skill.handler(user_id, **args, client_context=ctx)
         return skill.handler(user_id, **args)
     except Exception as e:
         return {"ok": False, "error": str(e)}

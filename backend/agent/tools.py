@@ -4,49 +4,151 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from tasks.models import Task, TaskBlock, TaskDDL, TaskTodo, SubTask
 
+from .timezone_ctx import format_dt_local, resolve_user_tz, user_now_payload
 
-def _parse_iso(dt: str) -> Optional[datetime]:
-    try:
-        return datetime.fromisoformat(dt)
-    except Exception:
+
+def _parse_iso(
+    dt: str,
+    *,
+    client_context: Optional[Dict[str, Any]] = None,
+) -> Optional[datetime]:
+    if not dt:
         return None
+    raw = str(dt).strip()
+    parsed = parse_datetime(raw)
+    if parsed is None:
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except Exception:
+            return None
+    if timezone.is_aware(parsed):
+        return parsed
+    tz = resolve_user_tz(client_context)
+    return timezone.make_aware(parsed, tz)
 
 
-def search_tasks(*, user_id: str, q: str = "", task_type: Optional[str] = None, limit: int = 10) -> dict:
+def _task_to_search_row(
+    t: Task,
+    *,
+    client_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    row: Dict[str, Any] = {
+        "id": str(t.id),
+        "type": t.type,
+        "title": t.title,
+        "status": t.effective_status,
+        "time_summary": "",
+    }
+    if t.type == Task.Type.BLOCK and hasattr(t, "block_detail"):
+        bd = t.block_detail
+        row["start_at"] = bd.start_at.isoformat()
+        row["end_at"] = bd.end_at.isoformat()
+        s = format_dt_local(bd.start_at, client_context)
+        e = format_dt_local(bd.end_at, client_context)
+        row["time_summary"] = f"{s} — {e}" if s and e else ""
+    elif t.type == Task.Type.DDL and hasattr(t, "ddl_detail"):
+        d = t.ddl_detail.due_at
+        row["due_at"] = d.isoformat()
+        due = format_dt_local(d, client_context)
+        row["time_summary"] = f"截止 {due}" if due else ""
+    elif t.type == Task.Type.TODO and hasattr(t, "todo_detail"):
+        td = t.todo_detail
+        if td.due_at:
+            row["due_at"] = td.due_at.isoformat()
+            due = format_dt_local(td.due_at, client_context)
+            row["time_summary"] = f"截止 {due}" if due else ""
+    return row
+
+
+def search_tasks(
+    *,
+    user_id: str,
+    q: str = "",
+    task_type: Optional[str] = None,
+    limit: int = 10,
+    range_from: Optional[str] = None,
+    range_to: Optional[str] = None,
+    client_context: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """
+    查询任务。支持标题关键词、类型、时间区间 range_from/range_to（须成对）。
+    指定时间区间时仅返回与该区间有交集的任务；无匹配则 items 为空，不返回其它日期任务。
+    """
     qs = (
         Task.objects.filter(user_id=user_id)
         .select_related("block_detail", "ddl_detail", "todo_detail")
         .prefetch_related("tags", "subtasks")
-        .order_by("-last_activity_at")
     )
+
+    rf_raw = (range_from or "").strip()
+    rt_raw = (range_to or "").strip()
+    range_applied = bool(rf_raw and rt_raw)
+
+    if bool(rf_raw) != bool(rt_raw):
+        return {
+            "ok": False,
+            "error": "range_from 与 range_to 须同时提供",
+            "items": [],
+            "count": 0,
+            "range_applied": False,
+        }
+
+    if range_applied:
+        rf = _parse_iso(rf_raw, client_context=client_context)
+        rt = _parse_iso(rt_raw, client_context=client_context)
+        if not rf or not rt or rt <= rf:
+            return {
+                "ok": False,
+                "error": "invalid_time_range",
+                "items": [],
+                "count": 0,
+                "range_applied": True,
+            }
+        qs = qs.filter(
+            Q(
+                type=Task.Type.BLOCK,
+                block_detail__start_at__lt=rt,
+                block_detail__end_at__gt=rf,
+            )
+            | Q(
+                type=Task.Type.DDL,
+                ddl_detail__due_at__gte=rf,
+                ddl_detail__due_at__lt=rt,
+            )
+            | Q(
+                type=Task.Type.TODO,
+                todo_detail__due_at__gte=rf,
+                todo_detail__due_at__lt=rt,
+            )
+        )
+        qs = qs.order_by("block_detail__start_at", "ddl_detail__due_at", "todo_detail__due_at")
+    else:
+        qs = qs.order_by("-last_activity_at")
+
     if task_type in ("block", "ddl", "todo"):
         qs = qs.filter(type=task_type)
     if q.strip():
         qs = qs.filter(title__icontains=q.strip())
-    items = list(qs[: max(1, min(limit, 20))])
 
-    results: List[Dict[str, Any]] = []
-    for t in items:
-        row: Dict[str, Any] = {
-            "id": str(t.id),
-            "type": t.type,
-            "title": t.title,
-            "status": t.effective_status,
-        }
-        if t.type == Task.Type.BLOCK and hasattr(t, "block_detail"):
-            row["start_at"] = t.block_detail.start_at.isoformat()
-            row["end_at"] = t.block_detail.end_at.isoformat()
-        elif t.type == Task.Type.DDL and hasattr(t, "ddl_detail"):
-            row["due_at"] = t.ddl_detail.due_at.isoformat()
-        elif t.type == Task.Type.TODO and hasattr(t, "todo_detail") and t.todo_detail.due_at:
-            row["due_at"] = t.todo_detail.due_at.isoformat()
-        results.append(row)
+    items = list(qs[: max(1, min(limit, 50))])
+    results = [_task_to_search_row(t, client_context=client_context) for t in items]
 
-    return {"items": results, "count": len(results)}
+    payload: Dict[str, Any] = {
+        "ok": True,
+        "items": results,
+        "count": len(results),
+        "range_applied": range_applied,
+    }
+    if range_applied:
+        payload["range_from"] = rf_raw
+        payload["range_to"] = rt_raw
+    return payload
 
 
 def build_task_draft(
@@ -57,14 +159,21 @@ def build_task_draft(
     start_at: Optional[str] = None,
     end_at: Optional[str] = None,
     due_at: Optional[str] = None,
+    expected_minutes: Optional[int] = None,
+    subtasks: Optional[list] = None,
     tag_ids: Optional[list] = None,
 ) -> dict:
-    # 仅构造草稿（不落库）
+    """构造单条任务草稿（不落库）。task_type 须为 block | ddl | todo。"""
+    tt = (task_type or "").strip().lower()
+    if tt not in ("block", "ddl", "todo"):
+        return {"ok": False, "error": f"无效 task_type: {task_type!r}，须为 block、ddl 或 todo"}
+
     d: Dict[str, Any] = {
-        "type": task_type,
-        "title": title,
-        "description": description,
-        "tag_ids": tag_ids or [],
+        "ok": True,
+        "type": tt,
+        "title": (title or "新任务")[:255],
+        "description": description or "",
+        "tag_ids": tag_ids if isinstance(tag_ids, list) else [],
     }
     if start_at:
         d["start_at"] = start_at
@@ -72,6 +181,23 @@ def build_task_draft(
         d["end_at"] = end_at
     if due_at:
         d["due_at"] = due_at
+    if tt == "todo":
+        if expected_minutes is not None:
+            try:
+                em = int(expected_minutes)
+                if em > 0:
+                    d["expected_minutes"] = em
+            except (TypeError, ValueError):
+                pass
+        if isinstance(subtasks, list):
+            cleaned = []
+            for item in subtasks:
+                if isinstance(item, dict) and (item.get("title") or "").strip():
+                    cleaned.append({"title": str(item["title"]).strip()[:255]})
+                elif isinstance(item, str) and item.strip():
+                    cleaned.append({"title": item.strip()[:255]})
+            if cleaned:
+                d["subtasks"] = cleaned
     return d
 
 
@@ -170,6 +296,7 @@ def generate_long_term_plan(
     end_date: str,
     daily_hours: float = 2.0,
     create_immediately: bool = False,
+    client_context: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """
     调用 LLM 根据目标和时间范围生成长期规划草稿。
@@ -193,18 +320,19 @@ def generate_long_term_plan(
         "- 按阶段或主题划分待办任务，每个 todo 对应一个独立的学习/工作主题\n"
         "- 每个 todo 下包含 2-6 个具体可操作的子任务（subtasks）\n"
         "- expected_minutes 为该 todo 预计总耗时（分钟），每天不超过 daily_hours 小时换算后合理估算\n"
-        "- due_at 在 start_date 到 end_date 之间均匀分布，格式如 2026-05-25T23:59:59+08:00\n"
+        "- due_at 在 start_date 到 end_date 之间均匀分布，须为 ISO8601 且带时区偏移（与用户本地一致）\n"
         "- 任务循序渐进，先基础后进阶\n"
         "- 子任务标题简洁具体，如'阅读第3章'、'完成练习题 1-10'\n"
-        "- 所有 ISO8601 时间必须包含完整的日期和时间\n"
+        "- 所有 ISO8601 时间必须包含完整的日期、时间与时区偏移\n"
     )
 
+    local = user_now_payload(client_context)
     user_msg = {
         "goal": goal,
         "start_date": start_date,
         "end_date": end_date,
         "daily_hours": daily_hours,
-        "now": timezone.now().isoformat(),
+        "user_local_time": local,
     }
 
     result = call_llm_json(system=system, user=str(user_msg))
@@ -220,7 +348,9 @@ def generate_long_term_plan(
 
     # create_immediately=True：直接落库，返回创建结果
     if create_immediately:
-        batch_result = create_tasks_batch(user_id=user_id, tasks=tasks)
+        batch_result = create_tasks_batch(
+            user_id=user_id, tasks=tasks, client_context=client_context
+        )
         return {
             "ok": True,
             "created_immediately": True,
@@ -239,7 +369,12 @@ def generate_long_term_plan(
     }
 
 
-def create_tasks_batch(*, user_id: str, tasks: list) -> dict:
+def create_tasks_batch(
+    *,
+    user_id: str,
+    tasks: list,
+    client_context: Optional[Dict[str, Any]] = None,
+) -> dict:
     """
     批量创建任务（直接落库）。由 ConfirmPlanView 调用，不经过 LLM 决策。
     每条 task 字段：type, title, description, start_at, end_at, due_at, remind_at
@@ -260,23 +395,37 @@ def create_tasks_batch(*, user_id: str, tasks: list) -> dict:
                 )
                 remind_raw = task_data.get("remind_at")
                 if remind_raw:
-                    parsed_remind = _parse_iso(str(remind_raw))
+                    parsed_remind = _parse_iso(
+                        str(remind_raw), client_context=client_context
+                    )
                     if parsed_remind:
                         task.remind_at = parsed_remind
                 task.save()
 
                 t_type = task.type
                 if t_type == Task.Type.BLOCK:
-                    s = _parse_iso(str(task_data.get("start_at") or ""))
-                    e = _parse_iso(str(task_data.get("end_at") or ""))
+                    s = _parse_iso(
+                        str(task_data.get("start_at") or ""),
+                        client_context=client_context,
+                    )
+                    e = _parse_iso(
+                        str(task_data.get("end_at") or ""),
+                        client_context=client_context,
+                    )
                     if s and e and e > s:
                         TaskBlock.objects.create(task=task, start_at=s, end_at=e)
                 elif t_type == Task.Type.DDL:
-                    d = _parse_iso(str(task_data.get("due_at") or ""))
+                    d = _parse_iso(
+                        str(task_data.get("due_at") or ""),
+                        client_context=client_context,
+                    )
                     if d:
                         TaskDDL.objects.create(task=task, due_at=d)
                 elif t_type == Task.Type.TODO:
-                    d = _parse_iso(str(task_data.get("due_at") or ""))
+                    d = _parse_iso(
+                        str(task_data.get("due_at") or ""),
+                        client_context=client_context,
+                    )
                     expected = task_data.get("expected_minutes")
                     try:
                         expected = int(expected) if expected is not None else None

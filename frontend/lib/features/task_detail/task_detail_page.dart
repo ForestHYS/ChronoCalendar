@@ -94,11 +94,12 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     if (widget.taskId != null) {
       _scheduleHydratePersistedTask(widget.taskId!);
     } else {
-      _localTask = _defaultLocalTask(TaskType.block);
+      final draft = _readAgentDraft(widget.initialExtra);
+      final draftType = draft != null ? _parseAgentDraftType(draft['type']) : null;
+      _localTask = _defaultLocalTask(draftType ?? TaskType.block);
       _editing = true;
       _initDraftsFromTask(_localTask!);
       _fillControllers(_localTask!);
-      final draft = _readAgentDraft(widget.initialExtra);
       if (draft != null) _applyAgentDraftLocal(draft);
       _initialNewSnapshot = _snapshotTask(_localTask!);
     }
@@ -192,14 +193,34 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
   DateTime? _parseIso(String? s) {
     if (s == null || s.trim().isEmpty) return null;
     try {
-      return DateTime.parse(s);
+      return DateTime.parse(s).toLocal();
     } catch (_) {
       return null;
     }
   }
 
+  TaskType? _parseAgentDraftType(dynamic raw) {
+    final s = (raw as String?)?.trim().toLowerCase();
+    switch (s) {
+      case 'block':
+        return TaskType.block;
+      case 'ddl':
+        return TaskType.ddl;
+      case 'todo':
+        return TaskType.todo;
+      default:
+        return null;
+    }
+  }
+
   /// 将 Agent 草稿写入本地控制器与草稿字段（保存前不调 PATCH）。
   void _applyAgentDraftLocal(Map<String, dynamic> draft) {
+    final draftType = _parseAgentDraftType(draft['type']);
+    if (draftType != null && _localTask != null && _localTask!.type != draftType) {
+      _localTask = _defaultLocalTask(draftType);
+      _initDraftsFromTask(_localTask!);
+    }
+
     final title = (draft['title'] as String?)?.trim();
     final desc = (draft['description'] as String?)?.trim();
     final startAt = _parseIso(draft['start_at'] as String?);
@@ -221,6 +242,47 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     if (dueAt != null) _draftDueAt = dueAt;
     if (tagIds.isNotEmpty) {
       _draftTagIds = List<String>.from(tagIds);
+    }
+
+    final em = draft['expected_minutes'];
+    if (em is int && em > 0) {
+      _expectedC.text = em.toString();
+    } else if (em != null) {
+      final parsed = int.tryParse(em.toString());
+      if (parsed != null && parsed > 0) {
+        _expectedC.text = parsed.toString();
+      }
+    }
+
+    final subs = draft['subtasks'];
+    if (subs is List && _localTask != null && _localTask!.type == TaskType.todo) {
+      final built = <Subtask>[];
+      for (var i = 0; i < subs.length; i++) {
+        final item = subs[i];
+        String? st;
+        if (item is Map) {
+          st = (item['title'] as String?)?.trim();
+        } else if (item is String) {
+          st = item.trim();
+        }
+        if (st != null && st.isNotEmpty) {
+          built.add(
+            Subtask(
+              id: 'agent-sub-${i + 1}',
+              title: st,
+              done: false,
+              order: i + 1,
+            ),
+          );
+        }
+      }
+      if (built.isNotEmpty) {
+        _localTask = _localTask!.copyWith(subtasks: built);
+      }
+    }
+
+    if (_localTask != null) {
+      _localTask = _composeTaskForSave(_localTask!);
     }
   }
 

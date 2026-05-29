@@ -119,3 +119,9 @@ CORS_ALLOW_ALL_ORIGINS = True  # 开发用；生产请改为 CORS_ALLOWED_ORIGIN
 AGENT_LLM_BASE_URL = "https://jeniya.top/v1"
 AGENT_LLM_API_KEY = "sk-2rkBuEmwGcu0WJ7fLdC7rSGELr1JBYCN38c145waQa7A6G0T"  # 为空表示禁用 LLM（会走规则降级）
 AGENT_LLM_MODEL = "gpt-5"
+
+# Agent 对话上下文：保留最近 N 条消息；总条数超过阈值时对更早部分做摘要
+AGENT_HISTORY_MAX_MESSAGES = 16
+AGENT_HISTORY_SUMMARIZE_THRESHOLD = 20
+# LLM 返回非 JSON 时的最大尝试次数（含首次）
+AGENT_LLM_JSON_MAX_RETRIES = 3

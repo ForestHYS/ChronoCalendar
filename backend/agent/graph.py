@@ -2,17 +2,22 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, TypedDict
 
-from django.utils import timezone
-
 from langgraph.graph import END, StateGraph
 
-from .llm import call_llm_json
-from .registry import get_skill, iter_skills, normalize_args, skills_prompt_lines
+from .history import build_llm_message_list
+from .llm import call_llm_json, call_llm_text
+from .registry import get_skill, normalize_args, skills_prompt_for
 from .models import AgentSession, ApprovalRequest
+from .task_types_guide import TASK_TYPES_GUIDE
+from .timezone_ctx import calendar_range_hints, timezone_prompt_lines, user_now_payload
 from . import tools
 import logging
 
 logger = logging.getLogger(__name__)
+
+VALID_INTENTS = frozenset(
+    {"chat", "create_task", "query_tasks", "plan", "delete"}
+)
 
 
 def _terminal_response(resp: Optional[dict]) -> bool:
@@ -32,6 +37,9 @@ class AgentState(TypedDict, total=False):
     session_id: str
     input_text: str
     client_context: dict
+    chat_history: list
+    history_summary: str
+    intent: str
     scratchpad: list
     last_tool: dict
     response: dict
@@ -42,68 +50,226 @@ def _normalize_input(state: AgentState) -> AgentState:
     state["input_text"] = text
     if state.get("scratchpad") is None:
         state["scratchpad"] = []
+    if state.get("chat_history") is None:
+        state["chat_history"] = []
     return state
 
 
-def _tool_catalog_prompt() -> str:
-    lines = skills_prompt_lines()
-    return "\n".join(lines)
+def _time_context_block(client_context: dict) -> str:
+    return "时间与用户时区：\n" + timezone_prompt_lines(client_context)
 
 
-def _decide_next(state: AgentState) -> AgentState:
-    """LLM 决策：respond / open_editor / tool。"""
+def _base_user_payload(state: AgentState) -> Dict[str, Any]:
+    ctx = state.get("client_context") or {}
+    return {
+        "user_local_time": user_now_payload(ctx),
+        "calendar_hints": calendar_range_hints(ctx),
+        "client_context": ctx,
+        "user_input": state.get("input_text") or "",
+        "intent": state.get("intent"),
+        "last_tool": state.get("last_tool"),
+    }
+
+
+def _llm_fail_message() -> dict:
+    return {
+        "type": "message",
+        "text": "AI 暂时无法解析回复，请稍后重试或换一种说法。",
+    }
+
+
+def _classify_intent(state: AgentState) -> AgentState:
+    """阶段 1：LLM 意图分类。"""
     if _terminal_response(state.get("response")):
         return state
 
     text = state.get("input_text") or ""
     ctx = state.get("client_context") or {}
-    now = timezone.now().isoformat()
-    last_tool = state.get("last_tool")
-    scratchpad = state.get("scratchpad") or []
-
+    history = (state.get("chat_history") or [])[-4:]
     system = (
-        "你是一个日程/任务 app 的 AI 助手。\n"
-        "你可以与用户闲聊并正常用中文回复。\n"
-        "当需要查询数据、生成草稿、冲突检测或申请删除任务时，必须使用工具。\n"
-        "你必须输出严格 JSON 对象，不要输出任何额外文字。\n\n"
-        "输出格式之一：\n"
+        "你是日程 app 的意图分类器。根据用户最新一句话（结合少量上下文）判断意图。\n"
+        "只输出 JSON：{\"intent\":\"...\"}\n"
+        "intent 取值：\n"
+        "- chat：问候、闲聊、问现在几点\n"
+        "- create_task：创建/添加单个任务（含 block/ddl/todo）；"
+        "「加入日程」「添加到日历」等表述属于创建，不是查询\n"
+        "- query_tasks：查询、搜索、列出已有任务，或问某天有什么安排\n"
+        "- plan：长期规划、多天的学习计划/项目安排\n"
+        "- delete：删除任务\n"
+    )
+    user_payload = {
+        "user_local_time": user_now_payload(ctx),
+        "user_input": text,
+    }
+    messages = build_llm_message_list(
+        system=system,
+        user_payload=user_payload,
+        history_summary=state.get("history_summary"),
+        chat_history=history,
+    )
+    r = call_llm_json(system=system, user="", messages=messages)
+    intent = "chat"
+    if r.ok and r.data:
+        raw = (r.data.get("intent") or "").strip().lower()
+        if raw in VALID_INTENTS:
+            intent = raw
+    else:
+        logger.warning("intent classify LLM failed: %s", r.error)
+
+    state["intent"] = intent
+    state["scratchpad"].append({"intent": intent})
+    return state
+
+
+def _summarize_search_result_text(
+    items: List[Dict[str, Any]], user_input: str, *, count: int
+) -> str:
+    if not items:
+        return "未找到匹配的任务。"
+    lines = []
+    for it in items[:12]:
+        if not isinstance(it, dict):
+            continue
+        title = it.get("title") or "未命名"
+        typ = it.get("type") or ""
+        time_part = (it.get("time_summary") or "").strip()
+        if not time_part:
+            if it.get("start_at") and it.get("end_at"):
+                time_part = f"{it.get('start_at')} — {it.get('end_at')}"
+            elif it.get("due_at"):
+                time_part = f"截止 {it.get('due_at')}"
+        suffix = f" · {time_part}" if time_part else ""
+        lines.append(f"- {title}（{typ}）{suffix}")
+    blob = "\n".join(lines)
+    system = (
+        "你是日程助手。根据用户问题和任务列表，用 1～3 句中文简要说明；"
+        "每条已含时间信息，勿声称列表缺少日期。不要编造列表外的任务。"
+    )
+    user = f"用户问题：{user_input}\n\n共 {count} 条：\n{blob}"
+    r = call_llm_text(system=system, user=user)
+    if r.ok and r.data and (r.data.get("text") or "").strip():
+        return str(r.data["text"]).strip()
+    titles = "、".join(
+        (it.get("title") or "") for it in items[:3] if isinstance(it, dict)
+    )
+    suffix = f"等 {count} 个" if count > 3 else ""
+    return f"找到 {count} 个相关任务：{titles}{suffix}。点击下方「查看详情」可打开任务页。"
+
+
+def _decision_output_formats() -> str:
+    return (
+        "输出格式（严格 JSON，三选一）：\n"
         '{"action":"respond","text":"..."}\n'
         '{"action":"open_editor","task_draft":{...}}\n'
-        '{"action":"tool","tool":"<skill_name>","args":{...}}\n\n'
-        "可用工具（Skill）说明：\n"
-        f"{_tool_catalog_prompt()}\n\n"
-        "规则：\n"
-        "- 创建/编辑单个任务不能直接落库；生成草稿请用 build_task_draft，最终返回 open_editor。\n"
-        "- 删除任务必须使用工具 delete_task（只会创建审批请求，不会立即删除）。\n"
-        "- 若用户提出长期规划需求（如'帮我安排一周学习计划'、'规划下个月项目进度'、"
-        "'制定N天/周/月的XXX计划'），必须使用 generate_long_term_plan 工具，"
-        "并根据当前时间（now）推算 start_date 和 end_date（ISO 日期格式，如 2026-05-24）。\n"
-        "- 若用户明确说'直接添加/创建/加入日程'，则在 args 中传 create_immediately=true；否则传 false。\n"
-        "- 若用户只是问候/闲聊，用 respond。\n"
-        "- 若已有 last_tool（上一轮工具结果），请基于它给出最终 respond / open_editor / tool。\n"
+        '{"action":"tool","tool":"<skill_name>","args":{...}}\n'
     )
-    user = {
-        "now": now,
-        "client_context": ctx,
-        "user_input": text,
-        "last_tool": last_tool,
-    }
-    r = call_llm_json(system=system, user=str(user))
-    if not r.ok or not r.data:
-        logger.warning("LLM unavailable for decide_next: %s", r.error)
-        state["response"] = {
-            "type": "message",
-            "text": "AI 未接入或配置无效，无法处理你的请求。请检查 LLM 配置（AGENT_LLM_*）。",
-        }
+
+
+def _prompt_chat(ctx: dict) -> str:
+    return (
+        "你是日程 app 助手。用中文友好回复。\n"
+        + _time_context_block(ctx)
+        + "\n用户问「现在几点」请根据 user_local_time 直接回答，勿调用工具。\n"
+        + _decision_output_formats()
+        + "闲聊/问答请用 action:respond。\n"
+    )
+
+
+def _prompt_create_task(ctx: dict) -> str:
+    return (
+        "你是任务创建助手。创建单个任务不落库，须用 build_task_draft 生成草稿。\n"
+        + _time_context_block(ctx)
+        + "\n"
+        + TASK_TYPES_GUIDE
+        + "\n可用工具：\n"
+        + skills_prompt_for(["build_task_draft", "check_block_conflict"])
+        + "\n规则：\n"
+        "- 按语义选择 block/ddl/todo，勿默认 block。\n"
+        "- block 可先 check_block_conflict 再 build_task_draft，或直接 build_task_draft。\n"
+        "- 时间字段用 ISO8601（用户本地理解后带时区偏移）。\n"
+        "- 完成后用 open_editor（task_draft 来自工具输出）或 tool build_task_draft。\n"
+        + _decision_output_formats()
+    )
+
+
+def _prompt_query_tasks(ctx: dict) -> str:
+    return (
+        "你是任务查询助手。须调用 search_tasks，禁止手写任务列表。\n"
+        + _time_context_block(ctx)
+        + "\n可用工具：\n"
+        + skills_prompt_for(["search_tasks"])
+        + "\n规则：\n"
+        "- 问今天/明天/某天有哪些任务：必须传 range_from+range_to（见 calendar_hints）。\n"
+        "- 无匹配时勿去掉 range 拉最近任务。\n"
+        "- 按标题搜可传 q。\n"
+        + _decision_output_formats()
+        + "调用 search_tasks 时用 action:tool。\n"
+    )
+
+
+def _prompt_plan(ctx: dict) -> str:
+    return (
+        "你是长期规划助手。\n"
+        + _time_context_block(ctx)
+        + "\n可用工具：\n"
+        + skills_prompt_for(["generate_long_term_plan"])
+        + "\n规则：\n"
+        "- 根据用户本地日期推算 start_date、end_date（YYYY-MM-DD）。\n"
+        "- 用户明确要直接加入日程时 create_immediately=true，否则 false。\n"
+        + _decision_output_formats()
+    )
+
+
+def _prompt_delete() -> str:
+    return (
+        "你是任务删除助手。删除须调用 delete_task（会进入审批，不会立刻删除）。\n"
+        "可用工具：\n"
+        + skills_prompt_for(["delete_task"])
+        + "\n"
+        + _decision_output_formats()
+    )
+
+
+def _decide_by_intent(state: AgentState) -> AgentState:
+    """阶段 2：按 intent 使用专项短 prompt 决策 tool/回复。"""
+    if _terminal_response(state.get("response")):
         return state
 
-    state["scratchpad"].append({"llm_decision": r.data})
+    intent = (state.get("intent") or "chat").strip().lower()
+    if intent not in VALID_INTENTS:
+        intent = "chat"
+
+    ctx = state.get("client_context") or {}
+    history = state.get("chat_history") or []
+    history_summary = state.get("history_summary")
+
+    builders = {
+        "chat": lambda: _prompt_chat(ctx),
+        "create_task": lambda: _prompt_create_task(ctx),
+        "query_tasks": lambda: _prompt_query_tasks(ctx),
+        "plan": lambda: _prompt_plan(ctx),
+        "delete": lambda: _prompt_delete(),
+    }
+    system = builders.get(intent, builders["chat"])()
+
+    messages = build_llm_message_list(
+        system=system,
+        user_payload=_base_user_payload(state),
+        history_summary=history_summary,
+        chat_history=history,
+    )
+    r = call_llm_json(system=system, user="", messages=messages)
+    if not r.ok or not r.data:
+        logger.warning("LLM unavailable for decide_by_intent(%s): %s", intent, r.error)
+        state["response"] = _llm_fail_message()
+        return state
+
+    state["scratchpad"].append({"llm_decision": r.data, "intent": intent})
     state["response"] = {"type": "decision", "decision": r.data}
     return state
 
 
 def _run_tool(state: AgentState) -> AgentState:
-    """处理 decision：respond/open_editor 直接落盘；tool 执行或进入审批。"""
     if not isinstance(state.get("response"), dict):
         return state
     resp = state["response"]
@@ -117,13 +283,19 @@ def _run_tool(state: AgentState) -> AgentState:
 
     action = decision.get("action")
     if action == "respond":
-        state["response"] = {"type": "message", "text": decision.get("text") or "收到。"}
+        text = (decision.get("text") or "").strip() or "收到。"
+        state["response"] = {"type": "message", "text": text}
         return state
     if action == "open_editor":
-        state["response"] = {
-            "type": "open_editor",
-            "task_draft": decision.get("task_draft") if isinstance(decision.get("task_draft"), dict) else {},
-        }
+        draft = decision.get("task_draft") if isinstance(decision.get("task_draft"), dict) else {}
+        tt = (draft.get("type") or "").strip().lower()
+        if tt not in ("block", "ddl", "todo"):
+            state["response"] = {
+                "type": "message",
+                "text": "草稿缺少有效任务类型（block/ddl/todo），请说明要创建哪类任务。",
+            }
+            return state
+        state["response"] = {"type": "open_editor", "task_draft": draft}
         return state
     if action != "tool":
         state["response"] = {"type": "message", "text": "无法处理的指令。"}
@@ -140,8 +312,8 @@ def _run_tool(state: AgentState) -> AgentState:
         return state
 
     user_id = state.get("user_id") or ""
+    client_context = state.get("client_context") or {}
 
-    # 需要人工审批：不落库执行，只创建 ApprovalRequest
     if skill.requires_approval:
         try:
             args = normalize_args(skill.name, raw_args)
@@ -182,7 +354,6 @@ def _run_tool(state: AgentState) -> AgentState:
         state["response"] = {"type": "message", "text": "该操作需要审批，但未配置审批流程。"}
         return state
 
-    # 普通工具执行
     try:
         args = normalize_args(skill.name, raw_args)
     except ValueError as e:
@@ -192,7 +363,9 @@ def _run_tool(state: AgentState) -> AgentState:
     from .registry import run_skill
 
     try:
-        out = run_skill(skill.name, user_id, raw_args)
+        tool_raw = dict(raw_args)
+        tool_raw["client_context"] = client_context
+        out = run_skill(skill.name, user_id, tool_raw)
     except Exception as e:
         logger.exception("run_skill failed")
         state["response"] = {"type": "message", "text": f"工具执行失败：{e}"}
@@ -203,6 +376,53 @@ def _run_tool(state: AgentState) -> AgentState:
     return state
 
 
+def _compose_build_task_draft(state: AgentState, draft: dict) -> None:
+    if draft.get("ok") is False:
+        state["response"] = {
+            "type": "message",
+            "text": draft.get("error") or "草稿生成失败。",
+        }
+        return
+    title = draft.get("title") or "新任务"
+    tt = draft.get("type") or ""
+    type_label = {"block": "固定时段", "ddl": "截止日期", "todo": "待办"}.get(tt, tt)
+    clean_draft = {k: v for k, v in draft.items() if k not in ("ok", "error")}
+    state["response"] = {
+        "type": "open_editor",
+        "task_draft": clean_draft,
+        "message": f"已生成{type_label}任务「{title}」草稿，请确认后保存。",
+    }
+
+
+def _compose_check_block_conflict(state: AgentState, out: dict, args: dict) -> None:
+    conflict = out.get("conflict")
+    title = (state.get("input_text") or "新任务")[:255]
+    draft: Dict[str, Any] = {
+        "type": "block",
+        "title": title,
+        "description": "",
+        "tag_ids": [],
+    }
+    nr = (conflict or {}).get("new_range") if isinstance(conflict, dict) else None
+    if isinstance(nr, dict) and nr.get("start_at") and nr.get("end_at"):
+        draft["start_at"] = nr["start_at"]
+        draft["end_at"] = nr["end_at"]
+    elif args.get("start_at") and args.get("end_at"):
+        draft["start_at"] = args["start_at"]
+        draft["end_at"] = args["end_at"]
+
+    resp: Dict[str, Any] = {
+        "type": "open_editor",
+        "task_draft": draft,
+    }
+    if conflict:
+        resp["conflict"] = conflict
+        resp["message"] = "检测到时间冲突，可选择建议时间或自行修改后保存。"
+    else:
+        resp["message"] = "该时段无冲突，请确认任务草稿后保存。"
+    state["response"] = resp
+
+
 def _compose_response(state: AgentState) -> AgentState:
     if _terminal_response(state.get("response")):
         return state
@@ -210,102 +430,112 @@ def _compose_response(state: AgentState) -> AgentState:
     text = state.get("input_text") or ""
     last_tool = state.get("last_tool")
 
-    # 长期规划工具的输出直接格式化，无需再过一遍 LLM
-    if isinstance(last_tool, dict) and last_tool.get("tool") == "generate_long_term_plan":
+    if isinstance(last_tool, dict):
+        tool_name = last_tool.get("tool")
         out = last_tool.get("output") or {}
-        if not out.get("ok"):
-            state["response"] = {
-                "type": "message",
-                "text": out.get("error") or "规划生成失败，请稍后再试。",
-            }
+        args = last_tool.get("args") or {}
+
+        if tool_name == "build_task_draft":
+            _compose_build_task_draft(state, out)
             return state
 
-        conflicts = out.get("conflicts") or []
-        plan_title = out.get("plan_title") or "长期规划"
-        conflict_hint = f"（{len(conflicts)} 个时段与已有日程有冲突）" if conflicts else ""
+        if tool_name == "check_block_conflict":
+            if out.get("ok") is False:
+                state["response"] = {
+                    "type": "message",
+                    "text": "时间范围无效，请重新说明开始和结束时间。",
+                }
+            else:
+                _compose_check_block_conflict(state, out, args)
+            return state
 
-        # create_immediately=True：工具已直接落库，返回成功消息
-        if out.get("created_immediately"):
-            created_count = out.get("total_created", 0)
-            error_count = len(out.get("errors") or [])
+        if tool_name == "search_tasks":
+            if out.get("ok") is False:
+                state["response"] = {
+                    "type": "message",
+                    "text": f"无法完成查询：{out.get('error') or '查询失败'}。",
+                }
+                return state
+            items = out.get("items") if isinstance(out.get("items"), list) else []
+            count = out.get("count", len(items))
+            range_applied = bool(out.get("range_applied"))
+            if not items:
+                empty_text = (
+                    "该时间段内没有安排任务。"
+                    if range_applied
+                    else "未找到匹配的任务。"
+                )
+                state["response"] = {
+                    "type": "query_result",
+                    "items": [],
+                    "text": empty_text,
+                }
+            else:
+                summary = _summarize_search_result_text(
+                    items, text, count=int(count) if count else len(items)
+                )
+                state["response"] = {
+                    "type": "query_result",
+                    "items": items,
+                    "text": summary,
+                }
+            return state
+
+        if tool_name == "generate_long_term_plan":
+            if not out.get("ok"):
+                state["response"] = {
+                    "type": "message",
+                    "text": out.get("error") or "规划生成失败，请稍后再试。",
+                }
+                return state
+            conflicts = out.get("conflicts") or []
+            plan_title = out.get("plan_title") or "长期规划"
+            if out.get("created_immediately"):
+                created_count = out.get("total_created", 0)
+                error_count = len(out.get("errors") or [])
+                state["response"] = {
+                    "type": "message",
+                    "text": (
+                        f"已成功将「{plan_title}」的 {created_count} 个任务添加到你的日程中！"
+                        + (f"（{error_count} 个任务创建失败）" if error_count else "")
+                    ),
+                    "refresh_tasks": True,
+                }
+                return state
+            tasks = out.get("tasks") or []
+            total = out.get("total") or len(tasks)
+            preview_hint = (
+                f"（注意：{len(conflicts)} 个任务与现有日程有冲突）" if conflicts else ""
+            )
             state["response"] = {
-                "type": "message",
-                "text": (
-                    f"已成功将「{plan_title}」的 {created_count} 个任务添加到你的日程中！"
-                    + (f"（{error_count} 个任务创建失败）" if error_count else "")
+                "type": "plan_preview",
+                "plan_title": plan_title,
+                "tasks": tasks,
+                "conflicts": conflicts,
+                "message": (
+                    f"已为你生成「{plan_title}」，共 {total} 个待办任务{preview_hint}。"
+                    "请查看下方计划预览，确认无误后点击「创建全部任务」批量生成日程。"
                 ),
-                "refresh_tasks": True,
             }
             return state
 
-        # create_immediately=False：返回预览
-        tasks = out.get("tasks") or []
-        total = out.get("total") or len(tasks)
-        preview_hint = f"（注意：{len(conflicts)} 个任务与现有日程有冲突）" if conflicts else ""
-        state["response"] = {
-            "type": "plan_preview",
-            "plan_title": plan_title,
-            "tasks": tasks,
-            "conflicts": conflicts,
-            "message": (
-                f"已为你生成「{plan_title}」，共 {total} 个待办任务{preview_hint}。"
-                "请查看下方计划预览，确认无误后点击「创建全部任务」批量生成日程。"
-            ),
-        }
-        return state
-
-    system = (
-        "你是任务日历 app 的 AI 助手。你可以正常聊天。\n"
-        "当 last_tool 存在时，请根据工具输出生成最终结果（严格 JSON）：\n"
-        "- last_tool.tool == search_tasks：{type:'query_result', items: last_tool.output.items, text:'简短说明'}\n"
-        "- last_tool.tool == build_task_draft：{type:'open_editor', task_draft: last_tool.output, message?:'...'}\n"
-        "- last_tool.tool == check_block_conflict：若有 conflict，输出 type:'open_editor' 并在顶层附带 conflict 字段（与 task_draft 同级）；"
-        "task_draft 须来自用户意图；conflict 取自工具输出的 conflict 字段。\n"
-        "若无 last_tool，输出 {type:'message', text:'...'}。\n"
-        "必须输出严格 JSON 对象。"
-    )
-    user = {"user_input": text, "last_tool": last_tool}
-    r = call_llm_json(system=system, user=str(user))
-    if not r.ok or not r.data:
-        logger.warning("LLM unavailable for compose_response: %s", r.error)
-        state["response"] = {"type": "message", "text": "AI 生成回复失败，请稍后再试。"}
-        return state
-
-    out = r.data
-    if out.get("type") in ("message", "open_editor", "query_result", "approval_required"):
-        state["response"] = out
-        return state
-    if out.get("action") == "respond":
-        state["response"] = {"type": "message", "text": out.get("text") or "收到。"}
-        return state
-    state["response"] = {"type": "message", "text": "收到。"}
+    logger.warning("compose_response fallback: last_tool=%s", last_tool)
+    state["response"] = {"type": "message", "text": "处理完成，但未生成可展示的结果。"}
     return state
-
-
-def _route_after_run(state: AgentState) -> str:
-    if _terminal_response(state.get("response")):
-        return "compose"
-    # generate_long_term_plan 结果直接进 compose，不再让 LLM 二次决策
-    last_tool = state.get("last_tool") or {}
-    if last_tool.get("tool") == "generate_long_term_plan":
-        return "compose"
-    return "decide"
 
 
 def build_graph():
     g = StateGraph(AgentState)
     g.add_node("NormalizeInput", _normalize_input)
-    g.add_node("DecideNext", _decide_next)
+    g.add_node("ClassifyIntent", _classify_intent)
+    g.add_node("DecideByIntent", _decide_by_intent)
     g.add_node("RunTool", _run_tool)
     g.add_node("ComposeResponse", _compose_response)
 
     g.set_entry_point("NormalizeInput")
-    g.add_edge("NormalizeInput", "DecideNext")
-    g.add_edge("DecideNext", "RunTool")
-    g.add_conditional_edges(
-        "RunTool",
-        _route_after_run,
-        {"compose": "ComposeResponse", "decide": "DecideNext"},
-    )
+    g.add_edge("NormalizeInput", "ClassifyIntent")
+    g.add_edge("ClassifyIntent", "DecideByIntent")
+    g.add_edge("DecideByIntent", "RunTool")
+    g.add_edge("RunTool", "ComposeResponse")
     g.add_edge("ComposeResponse", END)
     return g.compile()

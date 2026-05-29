@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/agent_client_context.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/ui/app_error_dialog.dart';
 import '../../data/providers.dart';
@@ -49,9 +50,15 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                 // 历史中的 open_editor 草稿和 approval_required 审批均已操作过，标记为已提交
                 final alreadyActed =
                     json['type'] == 'open_editor' ||
-                    json['type'] == 'approval_required';
+                    json['type'] == 'approval_required' ||
+                    (json['type'] == 'plan_preview' &&
+                        json['plan_confirmed'] == true);
                 restored.add(
-                  _ChatItem.assistant(json, initialSubmitted: alreadyActed),
+                  _ChatItem.assistant(
+                    json,
+                    messageId: m['id'] as String?,
+                    initialSubmitted: alreadyActed,
+                  ),
                 );
               } else {
                 restored.add(
@@ -101,11 +108,19 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     });
     try {
       await _ensureSession();
-      final resp = await ref
-          .read(agentRepositoryProvider)
-          .sendMessage(sessionId: _sessionId!, text: text);
+      final sent = await ref.read(agentRepositoryProvider).sendMessage(
+            sessionId: _sessionId!,
+            text: text,
+            clientContext: buildAgentClientContext(),
+          );
+      final resp = sent['response'] as Map<String, dynamic>? ?? {};
       setState(() {
-        _items.add(_ChatItem.assistant(resp));
+        _items.add(
+          _ChatItem.assistant(
+            resp,
+            messageId: sent['assistant_message_id'] as String?,
+          ),
+        );
       });
       // 后端标记了任务已直接创建（create_immediately=true），立即刷新本地任务缓存
       if (resp['refresh_tasks'] == true) {
@@ -209,9 +224,23 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                         ? _UserBubble(text: it.text!)
                         : _AssistantCard(
                             payload: it.payload!,
+                            messageId: it.messageId,
                             initialSubmitted: it.initialSubmitted,
                             onOpenEditor: _openEditorFromDraft,
                             onFollowUp: _appendAssistantPayload,
+                            onPlanConfirmed: (messageId) {
+                              setState(() {
+                                final idx = _items.indexOf(it);
+                                if (idx < 0) return;
+                                final p = _items[idx].payload;
+                                if (p == null) return;
+                                _items[idx] = _ChatItem.assistant(
+                                  {...p, 'plan_confirmed': true},
+                                  messageId: messageId,
+                                  initialSubmitted: true,
+                                );
+                              });
+                            },
                           ),
                   ),
                 );
@@ -273,20 +302,24 @@ class _ChatItem {
     required this.isUser,
     this.text,
     this.payload,
+    this.messageId,
     this.initialSubmitted = false,
   });
   final bool isUser;
   final String? text;
   final Map<String, dynamic>? payload;
+  final String? messageId;
   final bool initialSubmitted;
 
   factory _ChatItem.user(String t) => _ChatItem._(isUser: true, text: t);
   factory _ChatItem.assistant(
     Map<String, dynamic> payload, {
+    String? messageId,
     bool initialSubmitted = false,
   }) => _ChatItem._(
     isUser: false,
     payload: payload,
+    messageId: messageId,
     initialSubmitted: initialSubmitted,
   );
 }
@@ -318,11 +351,15 @@ class _AssistantCard extends ConsumerStatefulWidget {
     required this.payload,
     required this.onOpenEditor,
     required this.onFollowUp,
+    this.messageId,
     this.initialSubmitted = false,
+    this.onPlanConfirmed,
   });
   final Map<String, dynamic> payload;
+  final String? messageId;
   final void Function(Map<String, dynamic> draft) onOpenEditor;
   final void Function(Map<String, dynamic> payload) onFollowUp;
+  final void Function(String messageId)? onPlanConfirmed;
   final bool initialSubmitted;
 
   @override
@@ -414,6 +451,13 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
 
     if (type == 'message') {
       final text = payload['text'] as String? ?? '我暂时没理解你的意思。';
+      final items = payload['items'];
+      if (items is List && items.isNotEmpty) {
+        return _AgentTaskListCard(
+          text: text,
+          items: items,
+        );
+      }
       return _assistantTextCard(text);
     }
 
@@ -524,215 +568,19 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
     if (type == 'query_result') {
       final text = payload['text'] as String? ?? '查询结果如下：';
       final items = payload['items'];
-      return ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 360),
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(text),
-                const SizedBox(height: 10),
-                if (items is List && items.isNotEmpty)
-                  ...items.take(8).map((e) {
-                    if (e is! Map<String, dynamic>) {
-                      return const SizedBox.shrink();
-                    }
-                    final title = e['title'] as String? ?? '';
-                    final t = e['type'] as String? ?? '';
-                    final startAt = e['start_at'] as String?;
-                    final endAt = e['end_at'] as String?;
-                    final dueAt = e['due_at'] as String?;
-                    final subtitle =
-                        (t == 'block' && startAt != null && endAt != null)
-                        ? '$startAt - $endAt'
-                        : (dueAt ?? '');
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          if (subtitle.isNotEmpty)
-                            Text(
-                              subtitle,
-                              style: const TextStyle(
-                                color: AppColors.onSurfaceVariant,
-                              ),
-                            ),
-                        ],
-                      ),
-                    );
-                  })
-                else
-                  const Text(
-                    '未找到匹配任务',
-                    style: TextStyle(color: AppColors.onSurfaceVariant),
-                  ),
-              ],
-            ),
-          ),
-        ),
-      );
+      return _AgentTaskListCard(text: text, items: items);
     }
 
     if (type == 'plan_preview') {
-      final planTitle = payload['plan_title'] as String? ?? '长期规划';
-      final message = payload['message'] as String? ?? '';
-      final tasks = payload['tasks'];
-      final taskList = (tasks is List)
-          ? tasks.whereType<Map<String, dynamic>>().toList()
-          : <Map<String, dynamic>>[];
-      return ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 380),
-        child: Card(
-          child: Padding(
-            padding: const EdgeInsets.all(14),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  planTitle,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-                if (message.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text(
-                    message,
-                    style: const TextStyle(color: AppColors.onSurfaceVariant),
-                  ),
-                ],
-                if (taskList.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  ...taskList.take(12).map((t) {
-                    final title = t['title'] as String? ?? '';
-                    final subtasks = t['subtasks'];
-                    final subtaskCount = (subtasks is List)
-                        ? subtasks.length
-                        : 0;
-                    final dueAt = t['due_at'] as String?;
-                    final dueLabel = dueAt != null
-                        ? dueAt.substring(0, 10) // 只显示日期部分
-                        : null;
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Padding(
-                            padding: EdgeInsets.only(top: 2),
-                            child: Icon(
-                              Icons.check_box_outline_blank,
-                              size: 16,
-                              color: AppColors.onSurfaceVariant,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  title,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                Row(
-                                  children: [
-                                    if (dueLabel != null)
-                                      Text(
-                                        dueLabel,
-                                        style: const TextStyle(
-                                          color: AppColors.onSurfaceVariant,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    if (dueLabel != null && subtaskCount > 0)
-                                      const Text(
-                                        ' · ',
-                                        style: TextStyle(
-                                          color: AppColors.onSurfaceVariant,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    if (subtaskCount > 0)
-                                      Text(
-                                        '$subtaskCount 个子任务',
-                                        style: const TextStyle(
-                                          color: AppColors.onSurfaceVariant,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  }),
-                  if (taskList.length > 12)
-                    Text(
-                      '… 共 ${taskList.length} 个待办任务',
-                      style: const TextStyle(
-                        color: AppColors.onSurfaceVariant,
-                        fontSize: 12,
-                      ),
-                    ),
-                ],
-                const SizedBox(height: 12),
-                if (_submitted)
-                  const Row(
-                    children: [
-                      Icon(
-                        Icons.check_circle_outline,
-                        size: 16,
-                        color: AppColors.onSurfaceVariant,
-                      ),
-                      SizedBox(width: 6),
-                      Text(
-                        '已创建到日程',
-                        style: TextStyle(color: AppColors.onSurfaceVariant),
-                      ),
-                    ],
-                  )
-                else
-                  FilledButton(
-                    onPressed: taskList.isEmpty
-                        ? null
-                        : () async {
-                            try {
-                              final r = await ref
-                                  .read(agentRepositoryProvider)
-                                  .confirmPlan(taskList);
-                              // 创建完成后立即刷新任务列表
-                              await ref
-                                  .read(taskRepositoryProvider)
-                                  .refreshTasks();
-                              setState(() => _submitted = true);
-                              widget.onFollowUp(r);
-                            } catch (e) {
-                              if (context.mounted) {
-                                await showAppErrorDialog(
-                                  context,
-                                  title: '创建失败',
-                                  error: e,
-                                );
-                              }
-                            }
-                          },
-                    child: const Text('创建全部任务'),
-                  ),
-              ],
-            ),
-          ),
-        ),
+      return _PlanPreviewCard(
+        payload: payload,
+        messageId: widget.messageId,
+        initialSubmitted:
+            _submitted ||
+            widget.initialSubmitted ||
+            payload['plan_confirmed'] == true,
+        onFollowUp: onFollowUp,
+        onPlanConfirmed: widget.onPlanConfirmed,
       );
     }
 
@@ -749,14 +597,401 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
   }
 
   String _draftSummary(Map<String, dynamic> d) {
-    final title = (d['title'] as String?)?.trim();
+    final title = (d['title'] as String?)?.trim() ?? '（未命名）';
     final type = (d['type'] as String?)?.trim();
+    final typeLabel = switch (type) {
+      'block' => '固定时段',
+      'ddl' => '截止日期',
+      'todo' => '待办',
+      _ => type ?? '',
+    };
     final startAt = (d['start_at'] as String?)?.trim();
     final endAt = (d['end_at'] as String?)?.trim();
+    final dueAt = (d['due_at'] as String?)?.trim();
+    final em = d['expected_minutes'];
+    final subs = d['subtasks'];
+    final subCount = subs is List ? subs.length : 0;
+    final buf = StringBuffer();
+    if (typeLabel.isNotEmpty) buf.write('$typeLabel · ');
+    buf.write(title);
     if (type == 'block' && startAt != null && endAt != null) {
-      return '${title ?? '（未命名）'} · $startAt - $endAt';
+      buf.write(' · $startAt - $endAt');
+    } else if (dueAt != null && dueAt.isNotEmpty) {
+      buf.write(' · 截止 $dueAt');
     }
-    return title ?? '（未命名）';
+    if (type == 'todo' && em != null) buf.write(' · 预计 $em 分钟');
+    if (type == 'todo' && subCount > 0) buf.write(' · $subCount 个子任务');
+    return buf.toString();
+  }
+}
+
+/// 任务查询结果：上方文字简述 + 下方每条带「查看详情」。
+class _AgentTaskListCard extends ConsumerWidget {
+  const _AgentTaskListCard({
+    required this.text,
+    required this.items,
+  });
+
+  final String text;
+  final dynamic items;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final list = items is List
+        ? items.whereType<Map<String, dynamic>>().toList()
+        : <Map<String, dynamic>>[];
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 360),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(text),
+              const SizedBox(height: 10),
+              if (list.isNotEmpty) ...[
+                ...list.take(12).map((e) => _AgentTaskListRow(item: e)),
+                if (list.length > 12)
+                  Text(
+                    '… 另有 ${list.length - 12} 个任务未列出',
+                    style: const TextStyle(
+                      color: AppColors.onSurfaceVariant,
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AgentTaskListRow extends ConsumerWidget {
+  const _AgentTaskListRow({required this.item});
+
+  final Map<String, dynamic> item;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final id = (item['id'] as String?)?.trim();
+    final title = item['title'] as String? ?? '';
+    final t = item['type'] as String? ?? '';
+    final timeSummary = (item['time_summary'] as String?)?.trim();
+    final startAt = item['start_at'] as String?;
+    final endAt = item['end_at'] as String?;
+    final dueAt = item['due_at'] as String?;
+    final subtitle = timeSummary?.isNotEmpty == true
+        ? timeSummary!
+        : ((t == 'block' && startAt != null && endAt != null)
+              ? '$startAt - $endAt'
+              : (dueAt ?? ''));
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                if (subtitle.isNotEmpty)
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      color: AppColors.onSurfaceVariant,
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (id != null && id.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                context.push('/task/$id');
+                ref.read(taskRepositoryProvider).touchTaskAfterNavigation(id);
+              },
+              style: TextButton.styleFrom(
+                minimumSize: Size.zero,
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: const Text('查看详情'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PlanPreviewCard extends ConsumerStatefulWidget {
+  const _PlanPreviewCard({
+    required this.payload,
+    required this.onFollowUp,
+    this.messageId,
+    this.initialSubmitted = false,
+    this.onPlanConfirmed,
+  });
+
+  final Map<String, dynamic> payload;
+  final String? messageId;
+  final bool initialSubmitted;
+  final void Function(Map<String, dynamic> payload) onFollowUp;
+  final void Function(String messageId)? onPlanConfirmed;
+
+  @override
+  ConsumerState<_PlanPreviewCard> createState() => _PlanPreviewCardState();
+}
+
+class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
+  late final List<Map<String, dynamic>> _taskList;
+  late Set<int> _selected;
+  late bool _submitted;
+  bool _creating = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final tasks = widget.payload['tasks'];
+    _taskList = (tasks is List)
+        ? tasks.whereType<Map<String, dynamic>>().toList()
+        : <Map<String, dynamic>>[];
+    _selected = Set<int>.from(List.generate(_taskList.length, (i) => i));
+    _submitted =
+        widget.initialSubmitted || widget.payload['plan_confirmed'] == true;
+  }
+
+  void _selectAll() {
+    setState(() {
+      _selected = Set<int>.from(List.generate(_taskList.length, (i) => i));
+    });
+  }
+
+  void _selectNone() {
+    setState(() => _selected.clear());
+  }
+
+  void _toggle(int index) {
+    if (_submitted) return;
+    setState(() {
+      if (_selected.contains(index)) {
+        _selected.remove(index);
+      } else {
+        _selected.add(index);
+      }
+    });
+  }
+
+  Future<void> _confirmSelected() async {
+    if (_submitted || _creating || _selected.isEmpty) return;
+    final selectedTasks = _selected.map((i) => _taskList[i]).toList();
+    setState(() => _creating = true);
+    try {
+      final r = await ref.read(agentRepositoryProvider).confirmPlan(
+            selectedTasks,
+            clientContext: buildAgentClientContext(),
+            sourceMessageId: widget.messageId,
+          );
+      await ref.read(taskRepositoryProvider).refreshTasks();
+      if (!mounted) return;
+      setState(() {
+        _submitted = true;
+        _creating = false;
+      });
+      final mid = widget.messageId;
+      if (mid != null && mid.isNotEmpty) {
+        widget.onPlanConfirmed?.call(mid);
+      }
+      widget.onFollowUp(r);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _creating = false);
+        await showAppErrorDialog(context, title: '创建失败', error: e);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final planTitle = widget.payload['plan_title'] as String? ?? '长期规划';
+    final message = widget.payload['message'] as String? ?? '';
+    final selectedCount = _selected.length;
+    final total = _taskList.length;
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 380),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                planTitle,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (message.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  message,
+                  style: const TextStyle(color: AppColors.onSurfaceVariant),
+                ),
+              ],
+              if (_taskList.isNotEmpty && !_submitted) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Text(
+                      '已选 $selectedCount / $total',
+                      style: const TextStyle(
+                        color: AppColors.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const Spacer(),
+                    TextButton(
+                      onPressed: _selectAll,
+                      style: TextButton.styleFrom(
+                        minimumSize: Size.zero,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('全选'),
+                    ),
+                    TextButton(
+                      onPressed: _selectNone,
+                      style: TextButton.styleFrom(
+                        minimumSize: Size.zero,
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('全不选'),
+                    ),
+                  ],
+                ),
+              ],
+              if (_taskList.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxHeight: 280),
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: _taskList.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 4),
+                    itemBuilder: (context, index) {
+                      final t = _taskList[index];
+                      final title = t['title'] as String? ?? '';
+                      final subtasks = t['subtasks'];
+                      final subtaskCount =
+                          (subtasks is List) ? subtasks.length : 0;
+                      final dueAt = t['due_at'] as String?;
+                      final dueLabel =
+                          dueAt != null && dueAt.length >= 10
+                          ? dueAt.substring(0, 10)
+                          : dueAt;
+                      final checked = _selected.contains(index);
+                      return InkWell(
+                        onTap: _submitted ? null : () => _toggle(index),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(
+                                width: 24,
+                                height: 24,
+                                child: Checkbox(
+                                  value: checked,
+                                  onChanged: _submitted
+                                      ? null
+                                      : (_) => _toggle(index),
+                                  materialTapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  visualDensity: VisualDensity.compact,
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    if (dueLabel != null || subtaskCount > 0)
+                                      Text(
+                                        [
+                                          if (dueLabel != null) dueLabel,
+                                          if (subtaskCount > 0)
+                                            '$subtaskCount 个子任务',
+                                        ].join(' · '),
+                                        style: const TextStyle(
+                                          color: AppColors.onSurfaceVariant,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              if (_submitted)
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle_outline,
+                      size: 16,
+                      color: AppColors.onSurfaceVariant,
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      '已创建到日程',
+                      style: TextStyle(color: AppColors.onSurfaceVariant),
+                    ),
+                  ],
+                )
+              else
+                FilledButton(
+                  onPressed: _taskList.isEmpty || selectedCount == 0 || _creating
+                      ? null
+                      : _confirmSelected,
+                  child: _creating
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text(
+                          selectedCount == total
+                              ? '创建全部 ($total)'
+                              : '创建所选 ($selectedCount)',
+                        ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
