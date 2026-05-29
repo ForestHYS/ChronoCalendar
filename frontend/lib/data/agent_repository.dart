@@ -23,6 +23,7 @@ class AgentRepository {
     required String sessionId,
     required String text,
     Map<String, dynamic>? clientContext,
+    Map<String, dynamic>? interaction,
   }) async {
     final data = await _api.request(
       'POST',
@@ -31,12 +32,18 @@ class AgentRepository {
         'text': text,
         // ignore: use_null_aware_elements
         if (clientContext != null) 'client_context': clientContext,
+        if (interaction != null) 'interaction': interaction,
       },
       auth: true,
     );
     if (data is Map<String, dynamic>) {
       final resp = data['response'];
-      if (resp is Map<String, dynamic>) return resp;
+      if (resp is Map<String, dynamic>) {
+        return {
+          'response': resp,
+          'assistant_message_id': data['assistant_message_id'] as String?,
+        };
+      }
     }
     throw StateError('发送失败');
   }
@@ -90,12 +97,19 @@ class AgentRepository {
 
   /// 用户确认长期规划预览后，批量创建所有任务。
   Future<Map<String, dynamic>> confirmPlan(
-    List<Map<String, dynamic>> tasks,
-  ) async {
+    List<Map<String, dynamic>> tasks, {
+    Map<String, dynamic>? clientContext,
+    String? sourceMessageId,
+  }) async {
     final data = await _api.request(
       'POST',
       'agent/confirm-plan/',
-      body: {'tasks': tasks},
+      body: {
+        'tasks': tasks,
+        if (clientContext != null) 'client_context': clientContext,
+        if (sourceMessageId != null && sourceMessageId.isNotEmpty)
+          'source_message_id': sourceMessageId,
+      },
       auth: true,
     );
     if (data is Map<String, dynamic>) {

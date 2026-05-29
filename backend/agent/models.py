@@ -10,6 +10,8 @@ class AgentSession(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="agent_sessions"
     )
     title = models.CharField(max_length=100, blank=True, default="")
+    conversation_summary = models.TextField(blank=True, default="")
+    summary_through_id = models.UUIDField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

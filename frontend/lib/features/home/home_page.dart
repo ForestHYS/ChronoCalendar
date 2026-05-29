@@ -9,10 +9,12 @@ import '../../core/theme/app_colors.dart';
 import '../../core/theme/app_text_styles.dart';
 import '../../core/ui/app_error_dialog.dart';
 import '../../data/providers.dart';
+import '../../data/app_settings_repository.dart';
 import '../../data/task_repository.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../shared/widgets/app_card.dart';
+import 'widgets/home_empty_slot.dart';
 import 'widgets/title_with_tags_row.dart';
 import 'widgets/recent_task_card.dart';
 import 'widgets/tag_focus_donut_chart.dart';
@@ -115,14 +117,82 @@ List<TagFocusSlice> _compactFocusSlices(List<TagFocusSlice> slices) {
   return visible;
 }
 
-class HomePage extends ConsumerWidget {
+class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends ConsumerState<HomePage> {
+  List<String>? _todoOrderIds;
+  /// 左滑完成后先从列表移除，避免 [Dismissible] 已 dismiss 仍留在树中。
+  final Set<String> _dismissedRecentTaskIds = {};
+
+  List<String> _computeShortcutIds(TaskRepository repo, List<String> pinnedIds) {
+    return repo.homeShortcutTodos(pinnedIds: pinnedIds).map((t) => t.id).toList();
+  }
+
+  List<String> _mergeShortcutOrder(List<String> saved, List<String> computed) {
+    if (computed.isEmpty) return const [];
+    if (saved.isEmpty) return computed;
+    final computedSet = computed.toSet();
+    final merged = <String>[
+      for (final id in saved)
+        if (computedSet.contains(id)) id,
+      for (final id in computed)
+        if (!saved.contains(id)) id,
+    ];
+    return merged.take(AppSettingsRepository.homeShortcutTodoLimit).toList();
+  }
+
+  void _initTodoOrder(TaskRepository repo) {
+    final settings = ref.read(appSettingsRepositoryProvider);
+    final pinned = settings.pinnedTodoIds;
+    final computed = _computeShortcutIds(repo, pinned);
+    final saved = settings.homeTodoShortcutIds;
+    _todoOrderIds = _mergeShortcutOrder(saved, computed);
+  }
+
+  void _syncTodoOrder(TaskRepository repo) {
+    final settings = ref.read(appSettingsRepositoryProvider);
+    final pinned = settings.pinnedTodoIds;
+    _todoOrderIds = _computeShortcutIds(repo, pinned);
+    unawaited(settings.setHomeTodoShortcutIds(_todoOrderIds!));
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _initTodoOrder(ref.read(taskRepositoryProvider)));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final repo = ref.watch(taskRepositoryProvider);
-    final recent = repo.recentTasksForHome(limit: 3);
-    final todos = repo.todosByRecentUsage();
+    ref.listen<bool>(
+      taskRepositoryProvider.select((r) => r.isBootstrapping),
+      (prev, next) {
+        if (prev == true && next == false && mounted) {
+          setState(() => _initTodoOrder(ref.read(taskRepositoryProvider)));
+        }
+      },
+    );
+    ref.listen<int>(homeTabReselectedProvider, (prev, next) {
+      if (prev == null || prev == next || !mounted) return;
+      setState(() => _syncTodoOrder(ref.read(taskRepositoryProvider)));
+    });
+    if (_todoOrderIds == null) {
+      _initTodoOrder(repo);
+    }
+
+    final recent = repo
+        .recentTasksForHome(limit: 3)
+        .where((t) => !_dismissedRecentTaskIds.contains(t.id))
+        .toList();
     final tabular = const [FontFeature.tabularFigures()];
     final focusSlices = repo.lastWeekFocusSecondsByTag();
     final compactFocusSlices = _compactFocusSlices(focusSlices);
@@ -140,7 +210,12 @@ class HomePage extends ConsumerWidget {
           ),
         ],
       ),
-      body: ListView(
+      body: RefreshIndicator(
+        onRefresh: () async {
+          await ref.read(taskRepositoryProvider).refreshTasks();
+        },
+        child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
         children: [
           const Align(
@@ -149,15 +224,7 @@ class HomePage extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
           if (recent.isEmpty)
-            const AppCard(
-              padding: EdgeInsets.all(20),
-              child: Center(
-                child: Text(
-                  '暂无安排',
-                  style: TextStyle(color: AppColors.onSurfaceVariant),
-                ),
-              ),
-            )
+            const HomeEmptySlot.recent()
           else
             ...recent.map((t) {
               final tags = _tagsForTask(repo, t);
@@ -166,19 +233,23 @@ class HomePage extends ConsumerWidget {
                 tags: tags,
                 subtitle: _upcomingSubtitle(t),
                 onTap: () {
-                  repo.touchTask(t.id);
                   context.push('/task/${t.id}');
+                  repo.touchTaskAfterNavigation(t.id);
                 },
                 onFocus: () {
-                  repo.touchTask(t.id);
                   context.push('/pomodoro/${t.id}');
+                  repo.touchTaskAfterNavigation(t.id);
                 },
                 onDismissedComplete: () {
+                  setState(() => _dismissedRecentTaskIds.add(t.id));
                   unawaited(() async {
                     try {
                       await repo.completeTask(t.id);
+                      if (!mounted) return;
+                      setState(() => _dismissedRecentTaskIds.remove(t.id));
                     } catch (e) {
                       if (!context.mounted) return;
+                      setState(() => _dismissedRecentTaskIds.remove(t.id));
                       await showAppErrorDialog(
                         context,
                         title: '无法标记完成',
@@ -195,7 +266,13 @@ class HomePage extends ConsumerWidget {
             child: Text('Todo', style: AppTextStyles.homeSectionTitle),
           ),
           const SizedBox(height: 8),
-          ...todos.map((t) => _TodoExpandTile(task: t, repo: repo)),
+          if ((_todoOrderIds ?? []).isEmpty)
+            const HomeEmptySlot.todo()
+          else
+            _HomeTodoList(
+              orderIds: List.unmodifiable(_todoOrderIds!),
+              repo: repo,
+            ),
           const SizedBox(height: 20),
           const Align(
             alignment: Alignment.centerLeft,
@@ -205,7 +282,7 @@ class HomePage extends ConsumerWidget {
           AppCard(
             padding: const EdgeInsets.all(10),
             child: SizedBox(
-              height: 196,
+              height: 172,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -403,6 +480,7 @@ class HomePage extends ConsumerWidget {
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -461,8 +539,34 @@ class _FocusLegendLine extends StatelessWidget {
   }
 }
 
+class _HomeTodoList extends StatelessWidget {
+  const _HomeTodoList({
+    required this.orderIds,
+    required this.repo,
+  });
+
+  final List<String> orderIds;
+  final TaskRepository repo;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final id in orderIds)
+          if (repo.taskById(id) case final task?)
+            _TodoExpandTile(task: task, repo: repo),
+      ],
+    );
+  }
+}
+
 class _TodoExpandTile extends ConsumerStatefulWidget {
-  const _TodoExpandTile({required this.task, required this.repo});
+  const _TodoExpandTile({
+    required this.task,
+    required this.repo,
+  });
 
   final Task task;
   final TaskRepository repo;
@@ -479,6 +583,7 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
         widget.task;
     final canComplete = t.subtasks.isEmpty || t.subtasks.every((s) => s.done);
     final tags = _tagsForTask(widget.repo, t);
+    final isPinned = ref.watch(appSettingsRepositoryProvider).isTodoPinned(t.id);
     final tileTheme = Theme.of(context).copyWith(
       dividerColor: Colors.transparent,
       splashColor: Colors.transparent,
@@ -511,15 +616,31 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             mainAxisSize: MainAxisSize.min,
             children: [
-              TitleWithTagsRow(
-                title: t.title,
-                tags: tags,
-                titleStyle: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                  color: AppColors.onSurface,
-                  height: 1.3,
-                ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (isPinned)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2, right: 6),
+                      child: Icon(
+                        Icons.push_pin_rounded,
+                        size: 16,
+                        color: AppColors.primary.withValues(alpha: 0.85),
+                      ),
+                    ),
+                  Expanded(
+                    child: TitleWithTagsRow(
+                      title: t.title,
+                      tags: tags,
+                      titleStyle: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.onSurface,
+                        height: 1.3,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 8),
               SizedBox(
@@ -543,7 +664,9 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
             ],
           ),
           onExpansionChanged: (open) {
-            if (open) widget.repo.touchTask(t.id);
+            if (open) {
+              widget.repo.touchTask(t.id);
+            }
           },
           children: [
             Padding(
@@ -584,8 +707,8 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
                 children: [
                   OutlinedButton(
                     onPressed: () {
-                      widget.repo.touchTask(t.id);
                       context.push('/task/${t.id}');
+                      widget.repo.touchTaskAfterNavigation(t.id);
                     },
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.onSurfaceVariant,
@@ -613,8 +736,8 @@ class _TodoExpandTileState extends ConsumerState<_TodoExpandTile> {
                   const Spacer(),
                   OutlinedButton(
                     onPressed: () {
-                      widget.repo.touchTask(t.id);
                       context.push('/pomodoro/${t.id}');
+                      widget.repo.touchTaskAfterNavigation(t.id);
                     },
                     style: OutlinedButton.styleFrom(
                       foregroundColor: AppColors.primary,

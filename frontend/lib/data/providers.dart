@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/api/api_client.dart';
 import '../core/notifications/notification_service.dart';
 import '../core/notifications/reminder_scheduler.dart';
+import 'app_settings_repository.dart';
 import 'ai_settings_repository.dart';
 import 'auth_repository.dart';
 import 'agent_repository.dart';
@@ -25,6 +26,10 @@ final authRepositoryProvider = Provider<AuthRepository>((ref) {
 
 final pomodoroSettingsRepositoryProvider = Provider<PomodoroSettingsRepository>((ref) {
   return PomodoroSettingsRepository(ref.watch(sharedPreferencesProvider));
+});
+
+final appSettingsRepositoryProvider = ChangeNotifierProvider<AppSettingsRepository>((ref) {
+  return AppSettingsRepository(ref.watch(sharedPreferencesProvider));
 });
 
 final taskRepositoryProvider = ChangeNotifierProvider<TaskRepository>((ref) {
@@ -64,12 +69,13 @@ final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
 });
 
 class AuthNotifier extends ChangeNotifier {
-  AuthNotifier(this._repo, this._taskRepo) {
+  AuthNotifier(this._repo, this._taskRepo, this._appSettings) {
     _sync();
   }
 
   final AuthRepository _repo;
   final TaskRepository _taskRepo;
+  final AppSettingsRepository _appSettings;
 
   void _sync() {
     _loggedIn = _repo.isLoggedIn;
@@ -84,6 +90,12 @@ class AuthNotifier extends ChangeNotifier {
     notifyListeners();
     try {
       await _taskRepo.bootstrap();
+      await _taskRepo.purgeExpiredCompletedTasks(
+        _appSettings.autoDeleteCompletedAfterHours,
+      );
+      await _taskRepo.purgeExpiredOverdueTasks(
+        _appSettings.autoDeleteOverdueAfterHours,
+      );
     } catch (e) {
       _taskRepo.clearLocalCache();
       await _repo.logout();
@@ -103,6 +115,12 @@ class AuthNotifier extends ChangeNotifier {
     notifyListeners();
     try {
       await _taskRepo.bootstrap();
+      await _taskRepo.purgeExpiredCompletedTasks(
+        _appSettings.autoDeleteCompletedAfterHours,
+      );
+      await _taskRepo.purgeExpiredOverdueTasks(
+        _appSettings.autoDeleteOverdueAfterHours,
+      );
     } catch (e) {
       _taskRepo.clearLocalCache();
       await _repo.logout();
@@ -131,14 +149,16 @@ class AuthNotifier extends ChangeNotifier {
 /// 昵称等资料变更后递增，供设置页刷新展示（不触发 GoRouter 重建）。
 final profileRefreshProvider = StateProvider<int>((ref) => 0);
 
+/// 底栏切回「主页」Tab 时递增，供 [HomePage] 刷新 Todo 顺序。
+final homeTabReselectedProvider = StateProvider<int>((ref) => 0);
+
 /// 底栏 Tab 切换方向：1 向右切（索引增大），−1 向左切。
 final shellNavDirectionProvider = StateProvider<int>((ref) => 1);
 
 final authNotifierProvider = ChangeNotifierProvider<AuthNotifier>((ref) {
   return AuthNotifier(
     ref.watch(authRepositoryProvider),
-    // 必须用 read：若 watch TaskRepository，clearLocalCache() 会 notifyListeners，
-    // Riverpod 会 dispose 本 AuthNotifier，异步 logout 末尾再 notifyListeners 会崩溃。
     ref.read(taskRepositoryProvider),
+    ref.read(appSettingsRepositoryProvider),
   );
 });

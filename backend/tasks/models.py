@@ -239,7 +239,7 @@ class FocusSession(models.Model):
         User, on_delete=models.CASCADE, related_name="focus_sessions"
     )
     task = models.ForeignKey(
-        Task, on_delete=models.CASCADE, related_name="focus_sessions"
+        Task, on_delete=models.SET_NULL, null=True, blank=True, related_name="focus_sessions"
     )
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.RUNNING

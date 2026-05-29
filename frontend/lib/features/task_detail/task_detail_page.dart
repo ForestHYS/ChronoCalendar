@@ -10,11 +10,14 @@ import '../../core/ui/app_error_dialog.dart';
 import '../../core/ui/app_message_dialog.dart';
 import '../../core/ui/datetime_pickers.dart';
 import '../../core/utils/parse_minutes.dart';
+import '../../data/app_settings_repository.dart';
 import '../../data/providers.dart';
 import '../../data/task_repository.dart';
 import '../../domain/models/tag.dart';
 import '../../domain/models/task.dart';
 import '../../domain/models/task_status.dart';
+import '../../shared/widgets/app_empty_state.dart';
+import '../../shared/widgets/app_loading_view.dart';
 
 class TaskDetailPage extends ConsumerStatefulWidget {
   /// [taskId] 为 `null` 时表示新建：全程本地草稿，**保存时**才 POST 落库。
@@ -91,11 +94,12 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     if (widget.taskId != null) {
       _scheduleHydratePersistedTask(widget.taskId!);
     } else {
-      _localTask = _defaultLocalTask(TaskType.block);
+      final draft = _readAgentDraft(widget.initialExtra);
+      final draftType = draft != null ? _parseAgentDraftType(draft['type']) : null;
+      _localTask = _defaultLocalTask(draftType ?? TaskType.block);
       _editing = true;
       _initDraftsFromTask(_localTask!);
       _fillControllers(_localTask!);
-      final draft = _readAgentDraft(widget.initialExtra);
       if (draft != null) _applyAgentDraftLocal(draft);
       _initialNewSnapshot = _snapshotTask(_localTask!);
     }
@@ -189,14 +193,34 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
   DateTime? _parseIso(String? s) {
     if (s == null || s.trim().isEmpty) return null;
     try {
-      return DateTime.parse(s);
+      return DateTime.parse(s).toLocal();
     } catch (_) {
       return null;
     }
   }
 
+  TaskType? _parseAgentDraftType(dynamic raw) {
+    final s = (raw as String?)?.trim().toLowerCase();
+    switch (s) {
+      case 'block':
+        return TaskType.block;
+      case 'ddl':
+        return TaskType.ddl;
+      case 'todo':
+        return TaskType.todo;
+      default:
+        return null;
+    }
+  }
+
   /// 将 Agent 草稿写入本地控制器与草稿字段（保存前不调 PATCH）。
   void _applyAgentDraftLocal(Map<String, dynamic> draft) {
+    final draftType = _parseAgentDraftType(draft['type']);
+    if (draftType != null && _localTask != null && _localTask!.type != draftType) {
+      _localTask = _defaultLocalTask(draftType);
+      _initDraftsFromTask(_localTask!);
+    }
+
     final title = (draft['title'] as String?)?.trim();
     final desc = (draft['description'] as String?)?.trim();
     final startAt = _parseIso(draft['start_at'] as String?);
@@ -218,6 +242,47 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     if (dueAt != null) _draftDueAt = dueAt;
     if (tagIds.isNotEmpty) {
       _draftTagIds = List<String>.from(tagIds);
+    }
+
+    final em = draft['expected_minutes'];
+    if (em is int && em > 0) {
+      _expectedC.text = em.toString();
+    } else if (em != null) {
+      final parsed = int.tryParse(em.toString());
+      if (parsed != null && parsed > 0) {
+        _expectedC.text = parsed.toString();
+      }
+    }
+
+    final subs = draft['subtasks'];
+    if (subs is List && _localTask != null && _localTask!.type == TaskType.todo) {
+      final built = <Subtask>[];
+      for (var i = 0; i < subs.length; i++) {
+        final item = subs[i];
+        String? st;
+        if (item is Map) {
+          st = (item['title'] as String?)?.trim();
+        } else if (item is String) {
+          st = item.trim();
+        }
+        if (st != null && st.isNotEmpty) {
+          built.add(
+            Subtask(
+              id: 'agent-sub-${i + 1}',
+              title: st,
+              done: false,
+              order: i + 1,
+            ),
+          );
+        }
+      }
+      if (built.isNotEmpty) {
+        _localTask = _localTask!.copyWith(subtasks: built);
+      }
+    }
+
+    if (_localTask != null) {
+      _localTask = _composeTaskForSave(_localTask!);
     }
   }
 
@@ -555,6 +620,64 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
     if (mounted) context.pop();
   }
 
+  Future<void> _uncomplete() async {
+    final tid = widget.taskId;
+    if (tid == null) return;
+    try {
+      await ref.read(taskRepositoryProvider).uncompleteTask(tid);
+      if (!mounted) return;
+      setState(() {
+        _localTask = null;
+        _editing = false;
+        _baselineTask = null;
+        _clearDrafts();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      await showAppErrorDialog(context, title: '操作失败', error: e);
+    }
+  }
+
+  Future<void> _complete() async {
+    final tid = widget.taskId;
+    if (tid == null) return;
+    try {
+      await ref.read(taskRepositoryProvider).completeTask(tid);
+      if (!mounted) return;
+      setState(() {
+        _localTask = null;
+        _editing = false;
+        _baselineTask = null;
+        _clearDrafts();
+      });
+    } catch (e) {
+      if (!mounted) return;
+      await showAppErrorDialog(context, title: '标记完成失败', error: e);
+    }
+  }
+
+  Future<void> _toggleViewSubtask(String taskId, String subId, bool done) async {
+    try {
+      await ref.read(taskRepositoryProvider).toggleSubtask(taskId, subId, done);
+    } catch (e) {
+      if (!mounted) return;
+      await showAppErrorDialog(context, title: '更新失败', error: e);
+    }
+  }
+
+  Future<void> _setTodoPinned(String taskId, bool pinned) async {
+    final ok = await ref.read(appSettingsRepositoryProvider).setTodoPinned(taskId, pinned);
+    if (!ok && mounted) {
+      await showAppMessageDialog(
+        context,
+        title: '无法固定',
+        message: '主页快捷栏最多固定 ${AppSettingsRepository.maxPinnedTodos} 个 Todo，请先取消其它固定项。',
+        icon: Icons.push_pin_outlined,
+        iconColor: AppColors.warning,
+      );
+    }
+  }
+
   Future<void> _delete() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -599,24 +722,27 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
       return Scaffold(
         backgroundColor: AppColors.surface,
         appBar: AppBar(title: const Text('任务')),
-        body: const Center(
-          child: SizedBox(
-            width: 28,
-            height: 28,
-            child: CircularProgressIndicator(strokeWidth: 2.5),
-          ),
-        ),
+        body: const AppLoadingView(message: '正在加载任务…'),
       );
     }
 
     if (t == null) {
       return Scaffold(
+        backgroundColor: AppColors.surface,
         appBar: AppBar(title: const Text('任务')),
-        body: const Center(child: Text('任务不存在或已删除')),
+        body: const AppEmptyState(
+          icon: Icons.event_busy_outlined,
+          message: '任务不存在或已删除',
+          subtitle: '可能已被删除或尚未同步，请返回后刷新列表。',
+        ),
       );
     }
 
     final isNewTask = widget.taskId == null;
+    final isCompleted = t.status == TaskStatus.completed;
+    final canMarkComplete = !isCompleted &&
+        (t.subtasks.isEmpty || t.subtasks.every((s) => s.done));
+    final appSettings = ref.watch(appSettingsRepositoryProvider);
 
     final df = DateFormat('yyyy-MM-dd HH:mm');
 
@@ -712,6 +838,17 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                 ..._typeFields(context, t, df),
                 if (t.type == TaskType.todo) ...[
                   const SizedBox(height: 16),
+                  if (!_editing && !isNewTask)
+                    SwitchListTile(
+                      contentPadding: EdgeInsets.zero,
+                      secondary: const Icon(Icons.push_pin_outlined, size: 22),
+                      title: const Text('固定到主页快捷'),
+                      subtitle: Text(
+                        '最多 ${AppSettingsRepository.homeShortcutTodoLimit} 个；不足时由最近使用补齐',
+                      ),
+                      value: appSettings.isTodoPinned(t.id),
+                      onChanged: (v) => unawaited(_setTodoPinned(t.id, v)),
+                    ),
                   const Text('子任务', style: TextStyle(fontWeight: FontWeight.w500)),
                   const SizedBox(height: 8),
                   ...t.subtasks.map((s) {
@@ -726,7 +863,12 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                     }
                     return CheckboxListTile(
                       value: s.done,
-                      onChanged: null,
+                      onChanged: _editing
+                          ? null
+                          : (v) {
+                              if (v == null) return;
+                              unawaited(_toggleViewSubtask(t.id, s.id, v));
+                            },
                       title: Text(s.title),
                     );
                   }),
@@ -756,6 +898,24 @@ class _TaskDetailPageState extends ConsumerState<TaskDetailPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 child: Row(
                   children: [
+                    if (!isNewTask && isCompleted && !_editing) ...[
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => unawaited(_uncomplete()),
+                          child: const Text('标记未完成'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                    if (!isNewTask && !isCompleted && !_editing && canMarkComplete) ...[
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () => unawaited(_complete()),
+                          child: const Text('标记完成'),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
                     Expanded(
                       child: OutlinedButton(
                         onPressed: () async {

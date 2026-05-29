@@ -10,7 +10,7 @@ import '../../domain/models/task_status.dart';
 
 /// 半屏提醒弹窗：当 [Task.remindAt] 到点且 app 在前台时弹出。
 ///
-/// 提供快捷操作：开始专注 / 标记完成 / 稍后再提醒（5/30 分钟）/ 查看详情 / 关闭。
+/// 提供快捷操作：开始专注 / 标记完成 / 查看详情 / 稍后再提醒（5/30 分钟）。
 class ReminderSheet extends ConsumerWidget {
   const ReminderSheet({super.key, required this.task});
 
@@ -47,7 +47,6 @@ class ReminderSheet extends ConsumerWidget {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
           child: Column(
-            mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Center(
@@ -81,28 +80,11 @@ class ReminderSheet extends ConsumerWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              Text(
-                task.title.isEmpty ? '(未命名任务)' : task.title,
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w700,
+              Expanded(
+                child: Center(
+                  child: _TitleSection(task: task, theme: theme, cs: cs),
                 ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 8),
-              _DeadlineLine(task: task),
-              if (task.description.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                Text(
-                  task.description,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: cs.onSurfaceVariant,
-                  ),
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-              const Spacer(),
               _ActionsRow(task: task, sheetContext: context),
               const SizedBox(height: 8),
               _SnoozeRow(task: task, sheetContext: context),
@@ -125,39 +107,103 @@ class ReminderSheet extends ConsumerWidget {
   }
 }
 
-class _DeadlineLine extends StatelessWidget {
-  const _DeadlineLine({required this.task});
+class _TitleSection extends StatelessWidget {
+  const _TitleSection({
+    required this.task,
+    required this.theme,
+    required this.cs,
+  });
+
   final Task task;
+  final ThemeData theme;
+  final ColorScheme cs;
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final df = DateFormat('MM-dd HH:mm');
-    final lines = <String>[];
-    switch (task.type) {
-      case TaskType.block:
-        if (task.startAt != null) lines.add('开始 ${df.format(task.startAt!)}');
-        if (task.endAt != null) lines.add('结束 ${df.format(task.endAt!)}');
-        break;
-      case TaskType.ddl:
-        if (task.dueAt != null) lines.add('截止 ${df.format(task.dueAt!)}');
-        break;
-      case TaskType.todo:
-        if (task.dueAt != null) lines.add('截止 ${df.format(task.dueAt!)}');
-        if (task.expectedMinutes != null) {
-          lines.add('预计 ${task.expectedMinutes} 分钟');
-        }
-        break;
-    }
-    if (lines.isEmpty) return const SizedBox.shrink();
+    final title = task.title.isEmpty ? '(未命名任务)' : task.title;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _DecorativeLine(color: cs.outlineVariant),
+          const SizedBox(height: 18),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleLarge?.copyWith(
+              fontWeight: FontWeight.w700,
+              height: 1.35,
+            ),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 18),
+          _DecorativeLine(color: cs.outlineVariant),
+          const SizedBox(height: 12),
+          _TimeLine(task: task),
+          if (task.description.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            Text(
+              task.description,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: cs.onSurfaceVariant,
+                height: 1.4,
+              ),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DecorativeLine extends StatelessWidget {
+  const _DecorativeLine({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(Icons.event, size: 16, color: cs.onSurfaceVariant),
-        const SizedBox(width: 6),
         Expanded(
-          child: Text(
-            lines.join('   ·   '),
-            style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+          child: Container(
+            height: 1,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  color.withValues(alpha: 0),
+                  color.withValues(alpha: 0.55),
+                ],
+              ),
+            ),
+          ),
+        ),
+        Container(
+          width: 5,
+          height: 5,
+          margin: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: color.withValues(alpha: 0.65), width: 1),
+          ),
+        ),
+        Expanded(
+          child: Container(
+            height: 1,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  color.withValues(alpha: 0.55),
+                  color.withValues(alpha: 0),
+                ],
+              ),
+            ),
           ),
         ),
       ],
@@ -165,31 +211,79 @@ class _DeadlineLine extends StatelessWidget {
   }
 }
 
+class _TimeLine extends StatelessWidget {
+  const _TimeLine({required this.task});
+
+  final Task task;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final text = _timeText(task);
+    if (text == null) return const SizedBox.shrink();
+
+    return Text(
+      text,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        fontSize: 12.5,
+        height: 1.45,
+        color: cs.onSurfaceVariant,
+      ),
+    );
+  }
+
+  static String? _timeText(Task task) {
+    final df = DateFormat('MM-dd HH:mm');
+    switch (task.type) {
+      case TaskType.block:
+        final start = task.startAt;
+        final end = task.endAt;
+        if (start != null && end != null) {
+          return '开始 ${df.format(start)}    结束 ${df.format(end)}';
+        }
+        if (start != null) return '开始 ${df.format(start)}';
+        if (end != null) return '结束 ${df.format(end)}';
+        return null;
+      case TaskType.ddl:
+        if (task.dueAt != null) return '截止 ${df.format(task.dueAt!)}';
+        return null;
+      case TaskType.todo:
+        if (task.dueAt != null) return '截止 ${df.format(task.dueAt!)}';
+        if (task.expectedMinutes != null) return '预计 ${task.expectedMinutes} 分钟';
+        return null;
+    }
+  }
+}
+
 class _ActionsRow extends ConsumerWidget {
   const _ActionsRow({required this.task, required this.sheetContext});
+
   final Task task;
   final BuildContext sheetContext;
 
+  static const _buttonHeight = 44.0;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final cs = Theme.of(context).colorScheme;
     final canComplete = task.status == TaskStatus.active ||
         task.status == TaskStatus.overdue;
 
     return Row(
       children: [
         Expanded(
-          child: FilledButton.icon(
-            icon: const Icon(Icons.play_arrow_rounded, size: 20),
-            label: const Text('开始专注'),
+          child: _EqualSheetButton(
+            label: '开始专注',
+            height: _buttonHeight,
+            filled: true,
             onPressed: () => _popThenPush(context, sheetContext, '/pomodoro/${task.id}'),
           ),
         ),
         const SizedBox(width: 8),
         Expanded(
-          child: OutlinedButton.icon(
-            icon: const Icon(Icons.check_rounded, size: 20),
-            label: const Text('标记完成'),
+          child: _EqualSheetButton(
+            label: '标记完成',
+            height: _buttonHeight,
             onPressed: canComplete
                 ? () => _runAndClose(
                       sheetContext,
@@ -200,12 +294,11 @@ class _ActionsRow extends ConsumerWidget {
           ),
         ),
         const SizedBox(width: 8),
-        IconButton.filledTonal(
-          tooltip: '查看详情',
-          icon: const Icon(Icons.open_in_new_rounded),
-          onPressed: () => _popThenPush(context, sheetContext, '/task/${task.id}'),
-          style: IconButton.styleFrom(
-            backgroundColor: cs.surfaceContainerHighest,
+        Expanded(
+          child: _EqualSheetButton(
+            label: '展开详情',
+            height: _buttonHeight,
+            onPressed: () => _popThenPush(context, sheetContext, '/task/${task.id}'),
           ),
         ),
       ],
@@ -213,8 +306,54 @@ class _ActionsRow extends ConsumerWidget {
   }
 }
 
+class _EqualSheetButton extends StatelessWidget {
+  const _EqualSheetButton({
+    required this.label,
+    required this.height,
+    required this.onPressed,
+    this.filled = false,
+  });
+
+  final String label;
+  final double height;
+  final VoidCallback? onPressed;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = ButtonStyle(
+      minimumSize: WidgetStatePropertyAll(Size(0, height)),
+      maximumSize: WidgetStatePropertyAll(Size(double.infinity, height)),
+      padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 6)),
+      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      textStyle: WidgetStatePropertyAll(
+        TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: filled ? null : Theme.of(context).colorScheme.onSurface,
+        ),
+      ),
+    );
+
+    if (filled) {
+      return FilledButton(
+        style: style,
+        onPressed: onPressed,
+        child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+      );
+    }
+
+    return OutlinedButton(
+      style: style,
+      onPressed: onPressed,
+      child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+    );
+  }
+}
+
 class _SnoozeRow extends ConsumerWidget {
   const _SnoozeRow({required this.task, required this.sheetContext});
+
   final Task task;
   final BuildContext sheetContext;
 

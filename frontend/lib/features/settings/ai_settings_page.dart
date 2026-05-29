@@ -157,12 +157,6 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
           icon: const Icon(Icons.arrow_back),
           onPressed: () => context.pop(),
         ),
-        actions: [
-          TextButton(
-            onPressed: (_saving || _testing) ? null : _save,
-            child: const Text('保存'),
-          ),
-        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())

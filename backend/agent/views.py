@@ -7,6 +7,12 @@ from rest_framework.views import APIView
 from tasks.views import err, ok
 
 from .graph import build_graph
+from .history import prepare_conversation_context
+from .plan_interaction import (
+    get_active_plan_state,
+    handle_plan_interaction,
+    handle_plan_text_message,
+)
 from .models import AgentMessage, AgentSession, ApprovalRequest, UserLlmConfig
 from .serializers import (
     AgentMessageInSerializer,
@@ -15,7 +21,7 @@ from .serializers import (
     UserLlmConfigInSerializer,
 )
 from .registry import run_skill
-from .llm import test_llm_connection
+from .llm import test_llm_connection, is_llm_configured, llm_not_configured_response
 
 
 _graph = None
@@ -56,21 +62,67 @@ class AgentMessageCreateView(APIView):
 
         text = ins.validated_data["text"]
         client_context = ins.validated_data.get("client_context") or {}
+        interaction = ins.validated_data.get("interaction")
+        user_id = str(request.user.id)
 
-        AgentMessage.objects.create(session=session, role=AgentMessage.Role.USER, content_text=text)
+        if not is_llm_configured(user_id):
+            resp = llm_not_configured_response()
+            AgentMessage.objects.create(session=session, role=AgentMessage.Role.USER, content_text=text)
+            assistant_msg = AgentMessage.objects.create(
+                session=session,
+                role=AgentMessage.Role.ASSISTANT,
+                content_text=resp["text"],
+                content_json=resp,
+            )
+            session.save(update_fields=["updated_at"])
+            return ok({
+                "response": resp,
+                "assistant_message_id": str(assistant_msg.id),
+            })
+
+        history_summary, chat_history = prepare_conversation_context(session)
 
         try:
-            graph = _get_graph()
-            state = {
-                "user_id": str(request.user.id),
-                "session_id": str(session.id),
-                "input_text": text,
-                "client_context": client_context,
-            }
-            out = graph.invoke(state)
-            resp = out.get("response") if isinstance(out, dict) else None
-            if not isinstance(resp, dict):
-                resp = {"type": "message", "text": "系统繁忙，请稍后重试。"}
+            if isinstance(interaction, dict) and interaction.get("type"):
+                resp = handle_plan_interaction(
+                    session=session,
+                    interaction=interaction,
+                    client_context=client_context,
+                )
+            else:
+                active_plan = get_active_plan_state(session, for_text_intercept=True)
+
+                def _run_graph() -> dict:
+                    graph = _get_graph()
+                    state = {
+                        "user_id": str(request.user.id),
+                        "session_id": str(session.id),
+                        "input_text": text,
+                        "client_context": client_context,
+                        "chat_history": chat_history,
+                        "history_summary": history_summary or "",
+                    }
+                    out = graph.invoke(state)
+                    result = out.get("response") if isinstance(out, dict) else None
+                    if not isinstance(result, dict):
+                        return {"type": "message", "text": "系统繁忙，请稍后重试。"}
+                    return result
+
+                if active_plan:
+                    plan_resp = handle_plan_text_message(
+                        session=session,
+                        user_text=text,
+                        active_plan=active_plan,
+                        chat_history=chat_history,
+                        client_context=client_context,
+                        run_general_agent=_run_graph,
+                    )
+                    if plan_resp is not None:
+                        resp = plan_resp
+                    else:
+                        resp = _run_graph()
+                else:
+                    resp = _run_graph()
         except Exception:
             # Agent 不应因 LLM/解析失败导致 500；统一降级为可读提示
             resp = {
@@ -78,7 +130,9 @@ class AgentMessageCreateView(APIView):
                 "text": "AI 解析暂时不可用（可能是 LLM 配置无效）。你也可以直接用任务编辑页创建，或稍后再试。",
             }
 
-        AgentMessage.objects.create(
+        AgentMessage.objects.create(session=session, role=AgentMessage.Role.USER, content_text=text)
+
+        assistant_msg = AgentMessage.objects.create(
             session=session,
             role=AgentMessage.Role.ASSISTANT,
             content_text=resp.get("text") or resp.get("message") or "",
@@ -86,7 +140,10 @@ class AgentMessageCreateView(APIView):
         )
         session.save(update_fields=["updated_at"])
 
-        return ok({"response": resp})
+        return ok({
+            "response": resp,
+            "assistant_message_id": str(assistant_msg.id),
+        })
 
 
 class ApprovalDetailView(APIView):
@@ -162,7 +219,28 @@ class ConfirmPlanView(APIView):
         if len(tasks) > 50:
             return err("TOO_MANY", "单次最多批量创建 50 个任务")
 
-        result = create_tasks_batch(user_id=str(request.user.id), tasks=tasks)
+        client_context = request.data.get("client_context")
+        if not isinstance(client_context, dict):
+            client_context = None
+        result = create_tasks_batch(
+            user_id=str(request.user.id),
+            tasks=tasks,
+            client_context=client_context,
+        )
+
+        source_message_id = request.data.get("source_message_id")
+        if source_message_id:
+            msg = AgentMessage.objects.filter(
+                pk=source_message_id,
+                session__user=request.user,
+                role=AgentMessage.Role.ASSISTANT,
+            ).first()
+            if msg and isinstance(msg.content_json, dict):
+                if msg.content_json.get("type") == "plan_preview":
+                    merged = dict(msg.content_json)
+                    merged["plan_confirmed"] = True
+                    msg.content_json = merged
+                    msg.save(update_fields=["content_json"])
 
         created_count = result["total_created"]
         error_count = len(result["errors"])

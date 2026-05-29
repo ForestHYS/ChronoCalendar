@@ -10,6 +10,7 @@ import 'core/notifications/notification_service.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'data/providers.dart';
+import 'shared/widgets/app_loading_view.dart';
 
 class CalendarApp extends ConsumerStatefulWidget {
   const CalendarApp({super.key});
@@ -18,7 +19,7 @@ class CalendarApp extends ConsumerStatefulWidget {
   ConsumerState<CalendarApp> createState() => _CalendarAppState();
 }
 
-class _CalendarAppState extends ConsumerState<CalendarApp> {
+class _CalendarAppState extends ConsumerState<CalendarApp> with WidgetsBindingObserver {
   bool _schedulerStarted = false;
   bool _consumedLaunchPayload = false;
   ProviderSubscription<bool>? _authSub;
@@ -26,14 +27,14 @@ class _CalendarAppState extends ConsumerState<CalendarApp> {
   @override
   void initState() {
     super.initState();
-    // 监听登录态：登录后启动 scheduler，登出时停止。
+    WidgetsBinding.instance.addObserver(this);
     _authSub = ref.listenManual<bool>(
       authNotifierProvider.select((a) => a.isLoggedIn),
       (prev, next) {
         if (next) {
-          _onLoggedIn();
+          unawaited(_onLoggedIn());
         } else {
-          _onLoggedOut();
+          unawaited(_onLoggedOut());
         }
       },
       fireImmediately: false,
@@ -41,31 +42,52 @@ class _CalendarAppState extends ConsumerState<CalendarApp> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-      if (!ref.read(authNotifierProvider).isLoggedIn) return;
-      try {
-        await ref.read(taskRepositoryProvider).bootstrap();
-      } catch (_) {}
+      await _bootstrapIfLoggedIn();
+      if (!mounted) return;
       await _onLoggedIn();
     });
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _authSub?.close();
     _authSub = null;
     if (_schedulerStarted) {
-      // 兜底：根 widget 正常情况下与进程同寿，但热重启 / 测试场景下也可能 dispose
       unawaited(ref.read(reminderSchedulerProvider).stop());
       _schedulerStarted = false;
     }
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        ref.read(authNotifierProvider).isLoggedIn) {
+      unawaited(_purgeAutoDeleteTasks());
+    }
+  }
+
+  Future<void> _bootstrapIfLoggedIn() async {
+    if (!ref.read(authNotifierProvider).isLoggedIn) return;
+    try {
+      await ref.read(taskRepositoryProvider).bootstrap();
+      await _purgeAutoDeleteTasks();
+    } catch (_) {}
+  }
+
+  Future<void> _purgeAutoDeleteTasks() async {
+    final settings = ref.read(appSettingsRepositoryProvider);
+    final repo = ref.read(taskRepositoryProvider);
+    await repo.purgeExpiredCompletedTasks(settings.autoDeleteCompletedAfterHours);
+    await repo.purgeExpiredOverdueTasks(settings.autoDeleteOverdueAfterHours);
+  }
+
   Future<void> _onLoggedIn() async {
+    if (!ref.read(authNotifierProvider).isLoggedIn) return;
     if (_schedulerStarted) return;
     _schedulerStarted = true;
     debugPrint('[App] _onLoggedIn fired, starting scheduler');
-    // 首次登录后请求通知权限（不阻塞 UI）
     unawaited(NotificationService.instance.requestPermissions());
     ref.read(reminderSchedulerProvider).start();
     _maybeHandleLaunchPayload();
@@ -77,7 +99,6 @@ class _CalendarAppState extends ConsumerState<CalendarApp> {
     await ref.read(reminderSchedulerProvider).stop();
   }
 
-  /// 用户从系统通知冷启动 app 时，跳转到对应任务详情。
   void _maybeHandleLaunchPayload() {
     if (_consumedLaunchPayload) return;
     final id = NotificationService.instance.launchTaskId;
@@ -94,6 +115,9 @@ class _CalendarAppState extends ConsumerState<CalendarApp> {
   @override
   Widget build(BuildContext context) {
     final router = ref.watch(goRouterProvider);
+    final loggedIn = ref.watch(authNotifierProvider.select((a) => a.isLoggedIn));
+    final bootstrapping = ref.watch(taskRepositoryProvider.select((r) => r.isBootstrapping));
+
     return MaterialApp.router(
       title: '日程',
       theme: buildAppTheme(),
@@ -108,11 +132,23 @@ class _CalendarAppState extends ConsumerState<CalendarApp> {
       debugShowCheckedModeBanner: false,
       builder: (context, child) {
         final base = Theme.of(context).textTheme;
-        return Theme(
+        final themed = Theme(
           data: Theme.of(context).copyWith(
             textTheme: GoogleFonts.notoSansScTextTheme(base),
           ),
           child: child ?? const SizedBox.shrink(),
+        );
+        if (!loggedIn || !bootstrapping) return themed;
+        return Stack(
+          children: [
+            themed,
+            const Positioned.fill(
+              child: Material(
+                color: Color(0xCCFAFAFA),
+                child: AppLoadingView(message: '正在同步数据…'),
+              ),
+            ),
+          ],
         );
       },
     );

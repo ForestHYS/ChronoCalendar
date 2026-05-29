@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,6 +11,7 @@ import '../../core/ui/app_error_dialog.dart';
 import '../../core/ui/app_message_dialog.dart';
 import '../../core/utils/desktop_file_writer_stub.dart'
     if (dart.library.io) '../../core/utils/desktop_file_writer_io.dart';
+import '../../data/app_settings_repository.dart';
 import '../../data/providers.dart';
 import '../../shared/widgets/app_card.dart';
 
@@ -39,7 +41,8 @@ class SettingsPage extends ConsumerWidget {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
         children: [
           AppCard(
             padding: const EdgeInsets.all(14),
@@ -121,6 +124,17 @@ class SettingsPage extends ConsumerWidget {
                 ),
                 const Divider(height: 1, color: AppColors.outline),
                 ListTile(
+                  leading: const Icon(Icons.auto_delete_outlined),
+                  title: const Text('自动删除'),
+                  subtitle: Text(
+                    _autoDeleteSummary(ref.watch(appSettingsRepositoryProvider)),
+                    style: const TextStyle(fontSize: 12.5),
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _showAutoDeleteSettings(context, ref),
+                ),
+                const Divider(height: 1, color: AppColors.outline),
+                ListTile(
                   leading: const Icon(Icons.smart_toy_outlined),
                   title: const Text('AI 配置'),
                   trailing: const Icon(Icons.chevron_right_rounded),
@@ -187,6 +201,36 @@ class SettingsPage extends ConsumerWidget {
       ref.read(profileRefreshProvider.notifier).state++;
       await showAppMessageDialog(context, title: '已保存', message: '昵称已更新');
     }
+  }
+
+  static String _autoDeleteSummary(AppSettingsRepository s) {
+    final completed = s.autoDeleteCompletedAfterHours;
+    final overdue = s.autoDeleteOverdueAfterHours;
+    if (completed <= 0 && overdue <= 0) return '关闭';
+    final parts = <String>[];
+    if (completed > 0) {
+      parts.add('完成 ${s.labelForAutoDeleteHours(completed)}');
+    }
+    if (overdue > 0) {
+      parts.add('超时 ${s.labelForAutoDeleteHours(overdue)}');
+    }
+    return parts.join(' · ');
+  }
+
+  static Future<void> _showAutoDeleteSettings(BuildContext context, WidgetRef ref) async {
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => const _AutoDeleteDialog(),
+    );
+    if (saved != true || !context.mounted) return;
+
+    final settings = ref.read(appSettingsRepositoryProvider);
+    final completed = settings.autoDeleteCompletedAfterHours;
+    final overdue = settings.autoDeleteOverdueAfterHours;
+    final taskRepo = ref.read(taskRepositoryProvider);
+    await taskRepo.purgeExpiredCompletedTasks(completed);
+    await taskRepo.purgeExpiredOverdueTasks(overdue);
   }
 
   static Future<void> _showChangePassword(BuildContext context, WidgetRef ref) async {
@@ -305,6 +349,201 @@ class SettingsPage extends ConsumerWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _AutoDeleteDialog extends ConsumerStatefulWidget {
+  const _AutoDeleteDialog();
+
+  @override
+  ConsumerState<_AutoDeleteDialog> createState() => _AutoDeleteDialogState();
+}
+
+class _AutoDeleteDialogState extends ConsumerState<_AutoDeleteDialog> {
+  late int _completedHours;
+  late int _overdueHours;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final s = ref.read(appSettingsRepositoryProvider);
+    _completedHours = s.autoDeleteCompletedAfterHours;
+    _overdueHours = s.autoDeleteOverdueAfterHours;
+  }
+
+  Future<void> _save() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final settings = ref.read(appSettingsRepositoryProvider);
+      await settings.setAutoDeleteCompletedAfterHours(_completedHours);
+      await settings.setAutoDeleteOverdueAfterHours(_overdueHours);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _saving = false);
+      await showAppErrorDialog(context, title: '保存失败', error: e);
+    }
+  }
+
+  Widget _pickerRow({
+    required String title,
+    required int value,
+    required ValueChanged<int> onChanged,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: AppColors.onSurface,
+            ),
+          ),
+        ),
+        _AutoDeleteWheelPicker(
+          value: value,
+          enabled: !_saving,
+          onChanged: onChanged,
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('自动删除'),
+      content: SizedBox(
+        width: double.maxFinite,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              '任务删除后专注记录仍会保留，不影响近 7 日专注统计。',
+              style: TextStyle(fontSize: 13, height: 1.45, color: AppColors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 16),
+            _pickerRow(
+              title: '完成自动删除',
+              value: _completedHours,
+              onChanged: (v) => setState(() => _completedHours = v),
+            ),
+            const SizedBox(height: 4),
+            _pickerRow(
+              title: '超时自动删除',
+              value: _overdueHours,
+              onChanged: (v) => setState(() => _overdueHours = v),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        OutlinedButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('确认'),
+        ),
+      ],
+    );
+  }
+}
+
+class _AutoDeleteWheelPicker extends StatefulWidget {
+  const _AutoDeleteWheelPicker({
+    required this.value,
+    required this.onChanged,
+    this.enabled = true,
+  });
+
+  final int value;
+  final ValueChanged<int> onChanged;
+  final bool enabled;
+
+  @override
+  State<_AutoDeleteWheelPicker> createState() => _AutoDeleteWheelPickerState();
+}
+
+class _AutoDeleteWheelPickerState extends State<_AutoDeleteWheelPicker> {
+  late FixedExtentScrollController _controller;
+
+  static int _indexForHours(int hours) {
+    final options = AppSettingsRepository.autoDeleteOptions;
+    for (var i = 0; i < options.length; i++) {
+      if (options[i].$1 == hours) return i;
+    }
+    return 0;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = FixedExtentScrollController(initialItem: _indexForHours(widget.value));
+  }
+
+  @override
+  void didUpdateWidget(covariant _AutoDeleteWheelPicker oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value) {
+      final index = _indexForHours(widget.value);
+      if (_controller.selectedItem != index) {
+        _controller.jumpToItem(index);
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final options = AppSettingsRepository.autoDeleteOptions;
+    return SizedBox(
+      width: 118,
+      height: 112,
+      child: CupertinoPicker(
+        scrollController: _controller,
+        itemExtent: 34,
+        magnification: 1.08,
+        squeeze: 1.05,
+        useMagnifier: true,
+        onSelectedItemChanged: widget.enabled
+            ? (index) => widget.onChanged(options[index].$1)
+            : null,
+        children: [
+          for (final o in options)
+            Center(
+              child: Text(
+                o.$2,
+                style: TextStyle(
+                  fontSize: 15,
+                  color: widget.enabled
+                      ? AppColors.onSurface
+                      : AppColors.onSurfaceVariant,
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

@@ -86,30 +86,46 @@ class TodoTimelinePanel extends StatelessWidget {
               child: expanded
                   ? Padding(
                       padding: const EdgeInsets.only(top: 10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (todos.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 10),
-                              child: Text(
-                                '当前没有未完成的 Todo',
-                                style: TextStyle(color: AppColors.onSurfaceVariant, fontSize: 12.5),
-                              ),
-                            )
-                          else
-                            ...todos.take(6).map(
-                                  (todo) => _TodoLine(
-                                    task: todo,
-                                    onTap: () => context.push('/task/${todo.id}'),
-                                  ),
-                                ),
-                        ],
-                      ),
+                      child: _buildExpandedBody(context),
                     )
                   : const SizedBox.shrink(),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildExpandedBody(BuildContext context) {
+    if (todos.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 10),
+        child: Text(
+          '当前没有未完成的 Todo',
+          style: TextStyle(color: AppColors.onSurfaceVariant, fontSize: 12.5),
+        ),
+      );
+    }
+
+    final viewHeight = MediaQuery.sizeOf(context).height;
+    final maxListHeight = (viewHeight * 0.38).clamp(140.0, 320.0);
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(maxHeight: maxListHeight),
+      child: Scrollbar(
+        thumbVisibility: todos.length > 4,
+        child: ListView.builder(
+          shrinkWrap: true,
+          primary: false,
+          padding: EdgeInsets.zero,
+          itemCount: todos.length,
+          itemBuilder: (context, index) {
+            final todo = todos[index];
+            return _TodoLine(
+              task: todo,
+              onTap: () => context.push('/task/${todo.id}'),
+            );
+          },
         ),
       ),
     );

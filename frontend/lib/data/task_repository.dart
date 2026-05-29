@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../core/api/api_client.dart';
+import '../core/utils/haptics.dart';
 import '../core/utils/week_key.dart';
 import '../domain/models/tag.dart';
 import '../domain/models/task.dart';
 import '../domain/models/task_status.dart';
+import 'app_settings_repository.dart';
 import 'task_json.dart';
 
 /// 近滚动窗口内某标签专注时长（秒），与 `stats/focus/last-week/` 一致：
@@ -24,15 +28,24 @@ class TaskRepository extends ChangeNotifier {
   List<Task> _tasks = [];
   List<TagFocusSlice> _lastWeekFocusByTag = [];
   int _lastWeekFocusTotal = 0;
+  bool _bootstrapping = false;
 
   List<Tag> get tags => List.unmodifiable(_tags);
   List<Task> get tasks => List.unmodifiable(_tasks);
+  bool get isBootstrapping => _bootstrapping;
 
   /// 登录后拉取标签与任务列表。
   Future<void> bootstrap() async {
-    await refreshTags();
-    await refreshTasks();
-    await refreshFocusStats();
+    _bootstrapping = true;
+    notifyListeners();
+    try {
+      await refreshTags();
+      await refreshTasks();
+      await refreshFocusStats();
+    } finally {
+      _bootstrapping = false;
+      notifyListeners();
+    }
   }
 
   Future<void> refreshTags() async {
@@ -259,6 +272,35 @@ class TaskRepository extends ChangeNotifier {
       ..sort((a, b) => b.lastActivityAt.compareTo(a.lastActivityAt));
   }
 
+  /// 主页 Todo 快捷栏：先固定项（最多 [AppSettingsRepository.homeShortcutTodoLimit]），不足时用最近使用补齐。
+  List<Task> homeShortcutTodos({
+    required List<String> pinnedIds,
+    int limit = AppSettingsRepository.homeShortcutTodoLimit,
+  }) {
+    final active = _tasks
+        .where((t) => t.type == TaskType.todo && _isActiveOrOverdue(t))
+        .toList();
+    final byId = {for (final t in active) t.id: t};
+    final ordered = <Task>[];
+    for (final id in pinnedIds) {
+      if (ordered.length >= limit) break;
+      final t = byId[id];
+      if (t != null) ordered.add(t);
+    }
+    if (ordered.length < limit) {
+      final pinnedSet = ordered.map((t) => t.id).toSet();
+      final recent = active
+          .where((t) => !pinnedSet.contains(t.id))
+          .toList()
+        ..sort((a, b) => b.lastActivityAt.compareTo(a.lastActivityAt));
+      for (final t in recent) {
+        if (ordered.length >= limit) break;
+        ordered.add(t);
+      }
+    }
+    return ordered;
+  }
+
   int get currentWeekKey => weekKeyFor(DateTime.now());
 
   int countCompletedThisWeek() {
@@ -299,13 +341,92 @@ class TaskRepository extends ChangeNotifier {
 
   int lastWeekTotalFocusSeconds() => _lastWeekFocusTotal;
 
-  void touchTask(String id) {}
+  void touchTask(String id) {
+    final i = _tasks.indexWhere((t) => t.id == id);
+    if (i < 0) return;
+    _tasks[i] = _tasks[i].copyWith(lastActivityAt: DateTime.now());
+    notifyListeners();
+    unawaited(_touchTaskRemote(id));
+  }
+
+  /// 在路由转场开始后的下一帧再 [touchTask]，避免与页面 push 同帧触发全库 rebuild。
+  void touchTaskAfterNavigation(String id) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      touchTask(id);
+    });
+  }
+
+  Future<void> _touchTaskRemote(String id) async {
+    try {
+      final data = await _api.request('POST', 'tasks/$id/touch/', auth: true);
+      if (data is Map<String, dynamic>) {
+        _replaceTask(taskFromJson(data));
+      }
+    } catch (_) {
+      // 离线或网络失败时保留本地 optimistic 更新
+    }
+  }
 
   Future<void> completeTask(String id) async {
     final data = await _api.request('POST', 'tasks/$id/complete/', auth: true);
     if (data is Map<String, dynamic>) {
       _replaceTask(taskFromJson(data));
+      hapticTaskCompleted();
     }
+  }
+
+  Future<void> uncompleteTask(String id) async {
+    final data = await _api.request('POST', 'tasks/$id/uncomplete/', auth: true);
+    if (data is Map<String, dynamic>) {
+      _replaceTask(taskFromJson(data));
+    }
+  }
+
+  /// 删除超过 [afterHours] 的已完成任务；专注会话在后端保留（SET_NULL），不影响近 7 日统计。
+  Future<int> purgeExpiredCompletedTasks(int afterHours) async {
+    if (afterHours <= 0) return 0;
+    final cutoff = DateTime.now().subtract(Duration(hours: afterHours));
+    final ids = _tasks
+        .where(
+          (t) =>
+              t.status == TaskStatus.completed &&
+              t.completedAt != null &&
+              t.completedAt!.isBefore(cutoff),
+        )
+        .map((t) => t.id)
+        .toList();
+    var n = 0;
+    for (final id in ids) {
+      try {
+        await deleteTask(id);
+        n++;
+      } catch (_) {}
+    }
+    return n;
+  }
+
+  /// 删除超时超过 [afterHours] 的任务（自 block 结束 / ddl·todo 截止起算）。
+  Future<int> purgeExpiredOverdueTasks(int afterHours) async {
+    if (afterHours <= 0) return 0;
+    final cutoff = DateTime.now().subtract(Duration(hours: afterHours));
+    final ids = _tasks
+        .where((t) {
+          if (t.status == TaskStatus.completed || t.status == TaskStatus.cancelled) {
+            return false;
+          }
+          final deadline = t.type == TaskType.block ? t.endAt : t.dueAt;
+          return deadline != null && deadline.isBefore(cutoff);
+        })
+        .map((t) => t.id)
+        .toList();
+    var n = 0;
+    for (final id in ids) {
+      try {
+        await deleteTask(id);
+        n++;
+      } catch (_) {}
+    }
+    return n;
   }
 
   Future<void> updateTask(Task task) async {

@@ -11,8 +11,17 @@ class AgentSessionSerializer(serializers.ModelSerializer):
 
 
 class AgentMessageInSerializer(serializers.Serializer):
-    text = serializers.CharField(allow_blank=False, max_length=5000)
+    text = serializers.CharField(allow_blank=True, max_length=5000, required=False)
     client_context = serializers.DictField(required=False)
+    interaction = serializers.DictField(required=False)
+
+    def validate(self, attrs):
+        text = (attrs.get("text") or "").strip()
+        interaction = attrs.get("interaction")
+        if not text and not interaction:
+            raise serializers.ValidationError("text 与 interaction 至少填一项")
+        attrs["text"] = text or "（结构化操作）"
+        return attrs
 
 
 class AgentMessageOutSerializer(serializers.ModelSerializer):

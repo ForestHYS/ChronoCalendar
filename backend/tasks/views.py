@@ -669,6 +669,26 @@ class TaskViewSet(ViewSet):
         return ok(self._serialize(self._get_task(request, pk), request))
 
     @action(detail=True, methods=["post"])
+    def touch(self, request, pk=None):
+        """记录任务最近使用（主页 Todo 最近项排序）。"""
+        task = self._get_task(request, pk)
+        task.last_activity_at = timezone.now()
+        task.save(update_fields=["last_activity_at", "updated_at"])
+        return ok(self._serialize(self._get_task(request, pk), request))
+
+    @action(detail=True, methods=["post"])
+    def uncomplete(self, request, pk=None):
+        """将已完成任务恢复为进行中。"""
+        task = self._get_task(request, pk)
+        if task.status != Task.Status.COMPLETED:
+            return err("NOT_COMPLETED", "只有已完成的任务可标记为未完成")
+        task.status = Task.Status.ACTIVE
+        task.completed_at = None
+        task.last_activity_at = timezone.now()
+        task.save()
+        return ok(self._serialize(self._get_task(request, pk), request))
+
+    @action(detail=True, methods=["post"])
     def cancel(self, request, pk=None):
         task = self._get_task(request, pk)
         if task.status == Task.Status.CANCELLED:
@@ -899,6 +919,9 @@ class FocusStatsLastWeekView(APIView):
             if sec <= 0:
                 continue
             total += sec
+            if fs.task_id is None:
+                by_tag["__untagged__"] += sec
+                continue
             tags = list(fs.task.tags.all())
             if not tags:
                 by_tag["__untagged__"] += sec
