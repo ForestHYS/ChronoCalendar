@@ -10,7 +10,13 @@ from .plan_interaction import (
     compose_plan_questions,
     compose_schedule_preview,
 )
-from .llm import call_llm_json, call_llm_text
+from .llm import (
+    call_llm_json,
+    call_llm_text,
+    is_llm_configured,
+    is_missing_api_key_error,
+    llm_not_configured_response,
+)
 from .registry import get_skill, normalize_args, skills_prompt_for
 from .models import AgentSession, ApprovalRequest
 from .task_types_guide import TASK_TYPES_GUIDE
@@ -78,7 +84,9 @@ def _base_user_payload(state: AgentState) -> Dict[str, Any]:
     }
 
 
-def _llm_fail_message() -> dict:
+def _llm_fail_message(error: Optional[str] = None) -> dict:
+    if is_missing_api_key_error(error):
+        return llm_not_configured_response()
     return {
         "type": "message",
         "text": "AI 暂时无法解析回复，请稍后重试或换一种说法。",
@@ -88,6 +96,10 @@ def _llm_fail_message() -> dict:
 def _classify_intent(state: AgentState) -> AgentState:
     """阶段 1：LLM 意图分类。"""
     if _terminal_response(state.get("response")):
+        return state
+
+    if not is_llm_configured(state.get("user_id")):
+        state["response"] = llm_not_configured_response()
         return state
 
     text = state.get("input_text") or ""
@@ -130,7 +142,11 @@ def _classify_intent(state: AgentState) -> AgentState:
 
 
 def _summarize_search_result_text(
-    items: List[Dict[str, Any]], user_input: str, *, count: int
+    items: List[Dict[str, Any]],
+    user_input: str,
+    *,
+    count: int,
+    user_id: Optional[str] = None,
 ) -> str:
     if not items:
         return "未找到匹配的任务。"
@@ -154,7 +170,7 @@ def _summarize_search_result_text(
         "每条已含时间信息，勿声称列表缺少日期。不要编造列表外的任务。"
     )
     user = f"用户问题：{user_input}\n\n共 {count} 条：\n{blob}"
-    r = call_llm_text(system=system, user=user)
+    r = call_llm_text(system=system, user=user, user_id=user_id)
     if r.ok and r.data and (r.data.get("text") or "").strip():
         return str(r.data["text"]).strip()
     titles = "、".join(
@@ -278,7 +294,7 @@ def _decide_by_intent(state: AgentState) -> AgentState:
     )
     if not r.ok or not r.data:
         logger.warning("LLM unavailable for decide_by_intent(%s): %s", intent, r.error)
-        state["response"] = _llm_fail_message()
+        state["response"] = _llm_fail_message(r.error)
         return state
 
     state["scratchpad"].append({"llm_decision": r.data, "intent": intent})
@@ -489,7 +505,10 @@ def _compose_response(state: AgentState) -> AgentState:
                 }
             else:
                 summary = _summarize_search_result_text(
-                    items, text, count=int(count) if count else len(items)
+                    items,
+                    text,
+                    count=int(count) if count else len(items),
+                    user_id=state.get("user_id"),
                 )
                 state["response"] = {
                     "type": "query_result",

@@ -212,6 +212,7 @@ def classify_plan_continuation(
     user_input: str,
     active_plan: Dict[str, Any],
     chat_history: List[Dict[str, str]],
+    user_id: Optional[str] = None,
 ) -> str:
     stage = active_plan.get("stage") or ""
     system = (
@@ -238,7 +239,7 @@ def classify_plan_continuation(
         history_summary=None,
         chat_history=chat_history[-4:],
     )
-    r = call_llm_json(system=system, user="", messages=messages)
+    r = call_llm_json(system=system, user="", messages=messages, user_id=user_id)
     if r.ok and r.data:
         action = (r.data.get("action") or "").strip().lower()
         if action in PLAN_CONTINUATION_ACTIONS:
@@ -252,6 +253,7 @@ def _run_outline_from_context(
     *,
     client_context: Optional[Dict[str, Any]],
     refinement: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     goal = str(plan_context.get("goal") or "").strip()
     answers = plan_context.get("answers")
@@ -269,6 +271,7 @@ def _run_outline_from_context(
         client_context=client_context,
         refinement=refinement,
         previous_outline=previous if refinement else None,
+        user_id=user_id,
     )
 
 
@@ -278,6 +281,7 @@ def _run_schedule_from_context(
     client_context: Optional[Dict[str, Any]],
     refinement: Optional[str] = None,
     previous_tasks: Optional[list] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     return tools.plan_schedule_tasks(
         goal=str(plan_context.get("goal") or "").strip(),
@@ -290,6 +294,7 @@ def _run_schedule_from_context(
         client_context=client_context,
         refinement=refinement,
         previous_tasks=previous_tasks,
+        user_id=user_id,
     )
 
 
@@ -305,10 +310,12 @@ def handle_plan_text_message(
     """
     规划进行中的自由文字输入。返回 None 表示交回常规 Agent 图处理。
     """
+    user_id = str(session.user_id)
     action = classify_plan_continuation(
         user_input=user_text,
         active_plan=active_plan,
         chat_history=chat_history,
+        user_id=user_id,
     )
     stage = active_plan.get("stage") or ""
     plan_context = active_plan.get("plan_context") or {}
@@ -323,6 +330,7 @@ def handle_plan_text_message(
             plan_context,
             client_context=client_context,
             refinement=user_text,
+            user_id=user_id,
         )
         if not out.get("ok"):
             return {"type": "message", "text": out.get("error") or "方案修改失败。"}
@@ -335,6 +343,7 @@ def handle_plan_text_message(
             client_context=client_context,
             refinement=user_text,
             previous_tasks=prev_tasks if isinstance(prev_tasks, list) else None,
+            user_id=user_id,
         )
         if not out.get("ok"):
             return {"type": "message", "text": out.get("error") or "日程修改失败。"}
@@ -356,6 +365,7 @@ def handle_plan_interaction(
     itype = (interaction.get("type") or "").strip()
     source_message_id = interaction.get("source_message_id")
     plan_context = _merge_plan_context(interaction, session)
+    user_id = str(session.user_id)
 
     if itype == "plan_answers":
         _clear_plan_text_suspension(session, source_message_id)
@@ -370,6 +380,7 @@ def handle_plan_interaction(
             goal=goal,
             answers=answers,
             client_context=client_context,
+            user_id=user_id,
         )
         if not out.get("ok"):
             return {"type": "message", "text": out.get("error") or "方案生成失败。"}
@@ -399,6 +410,7 @@ def handle_plan_interaction(
             end_date=end_date,
             daily_hours=daily_hours,
             client_context=client_context,
+            user_id=user_id,
         )
         if not out.get("ok"):
             return {"type": "message", "text": out.get("error") or "日程生成失败。"}

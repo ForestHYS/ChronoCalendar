@@ -98,6 +98,31 @@ def _invoke_chat(
     return content
 
 
+LLM_NOT_CONFIGURED_MESSAGE = (
+    "尚未配置 AI 接口。请前往「我的 → AI 配置」填写 API Base URL 与 API Key 后再使用助手。"
+)
+
+
+def is_llm_configured(user_id: Optional[str] = None) -> bool:
+    api_key, _, _ = _load_llm_config(user_id)
+    return bool(api_key)
+
+
+def is_missing_api_key_error(error: Optional[str]) -> bool:
+    if not error:
+        return False
+    e = error.lower()
+    return "missing" in e and "api_key" in e
+
+
+def llm_not_configured_response() -> dict:
+    return {
+        "type": "message",
+        "text": LLM_NOT_CONFIGURED_MESSAGE,
+        "code": "llm_not_configured",
+    }
+
+
 def _load_llm_config(user_id: Optional[str]) -> tuple[str, Optional[str], str]:
     api_key = (getattr(settings, "AGENT_LLM_API_KEY", "") or "").strip()
     base_url = (getattr(settings, "AGENT_LLM_BASE_URL", "") or "").strip() or None
@@ -116,10 +141,12 @@ def _load_llm_config(user_id: Optional[str]) -> tuple[str, Optional[str], str]:
     if cfg is None:
         return api_key, base_url, model
 
+    user_key = (cfg.api_key or "").strip()
+    user_base_raw = (cfg.base_url or "").strip()
     resolved_model = (cfg.model_name or "").strip() or model
     return (
-        (cfg.api_key or "").strip(),
-        (cfg.base_url or "").strip() or None,
+        user_key or api_key,
+        user_base_raw.rstrip("/") if user_base_raw else base_url,
         resolved_model,
     )
 

@@ -69,7 +69,9 @@ def _messages_to_llm_turns(messages: List[AgentMessage]) -> List[Dict[str, str]]
     return turns
 
 
-def _summarize_messages(messages: List[AgentMessage]) -> str:
+def _summarize_messages(
+    messages: List[AgentMessage], *, user_id: Optional[str] = None
+) -> str:
     lines = []
     for m in messages:
         if m.role == AgentMessage.Role.USER:
@@ -81,7 +83,7 @@ def _summarize_messages(messages: List[AgentMessage]) -> str:
         "请将以下多轮对话压缩为简短中文摘要（200字以内），保留：用户目标、已创建/查询的任务名、"
         "时间约定、待办与未决事项。不要编造未出现的信息。"
     )
-    r = call_llm_text(system=system, user=blob)
+    r = call_llm_text(system=system, user=blob, user_id=user_id)
     if r.ok and r.data and r.data.get("text"):
         return str(r.data["text"]).strip()
     logger.warning("history summarize failed: %s", r.error)
@@ -96,6 +98,7 @@ def prepare_conversation_context(
     超出阈值时更新 session.conversation_summary 并截断近期窗口。
     """
     all_msgs = list(session.messages.order_by("created_at"))
+    user_id = str(session.user_id)
     max_recent = _max_recent_messages()
     threshold = _summarize_threshold()
 
@@ -117,14 +120,14 @@ def prepare_conversation_context(
     )
 
     if need_refresh and older:
-        new_summary = _summarize_messages(older)
+        new_summary = _summarize_messages(older, user_id=user_id)
         if new_summary:
             session.conversation_summary = new_summary[:4000]
             session.summary_through_id = last_older_id
             session.save(update_fields=["conversation_summary", "summary_through_id"])
             summary = new_summary
     elif not summary and len(all_msgs) >= threshold and older:
-        new_summary = _summarize_messages(older)
+        new_summary = _summarize_messages(older, user_id=user_id)
         if new_summary:
             session.conversation_summary = new_summary[:4000]
             session.summary_through_id = last_older_id

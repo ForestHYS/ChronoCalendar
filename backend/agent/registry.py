@@ -62,21 +62,18 @@ def _run_delete_task(user_id: str, **kw: Any) -> dict:
 
 
 def _run_plan_gather(user_id: str, **kw: Any) -> dict:
-    _ = user_id
     ctx = kw.pop("client_context", None)
-    return tools.plan_gather_requirements(client_context=ctx, **kw)
+    return tools.plan_gather_requirements(client_context=ctx, user_id=user_id, **kw)
 
 
 def _run_plan_outline(user_id: str, **kw: Any) -> dict:
-    _ = user_id
     ctx = kw.pop("client_context", None)
-    return tools.plan_generate_outline(client_context=ctx, **kw)
+    return tools.plan_generate_outline(client_context=ctx, user_id=user_id, **kw)
 
 
 def _run_plan_schedule(user_id: str, **kw: Any) -> dict:
-    _ = user_id
     ctx = kw.pop("client_context", None)
-    return tools.plan_schedule_tasks(client_context=ctx, **kw)
+    return tools.plan_schedule_tasks(client_context=ctx, user_id=user_id, **kw)
 
 
 def _validate_plan_gather(args: dict) -> dict:

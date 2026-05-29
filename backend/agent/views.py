@@ -21,7 +21,7 @@ from .serializers import (
     UserLlmConfigInSerializer,
 )
 from .registry import run_skill
-from .llm import test_llm_connection
+from .llm import test_llm_connection, is_llm_configured, llm_not_configured_response
 
 
 _graph = None
@@ -63,6 +63,22 @@ class AgentMessageCreateView(APIView):
         text = ins.validated_data["text"]
         client_context = ins.validated_data.get("client_context") or {}
         interaction = ins.validated_data.get("interaction")
+        user_id = str(request.user.id)
+
+        if not is_llm_configured(user_id):
+            resp = llm_not_configured_response()
+            AgentMessage.objects.create(session=session, role=AgentMessage.Role.USER, content_text=text)
+            assistant_msg = AgentMessage.objects.create(
+                session=session,
+                role=AgentMessage.Role.ASSISTANT,
+                content_text=resp["text"],
+                content_json=resp,
+            )
+            session.save(update_fields=["updated_at"])
+            return ok({
+                "response": resp,
+                "assistant_message_id": str(assistant_msg.id),
+            })
 
         history_summary, chat_history = prepare_conversation_context(session)
 

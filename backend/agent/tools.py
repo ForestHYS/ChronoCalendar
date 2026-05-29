@@ -296,15 +296,18 @@ def plan_gather_requirements(
     *,
     goal: str,
     client_context: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Planning 阶段 1：根据用户目标生成细化需求的选择题。
     """
-    from .llm import call_llm_json
+    from .llm import LLM_NOT_CONFIGURED_MESSAGE, call_llm_json, is_llm_configured, is_missing_api_key_error
 
     goal = (goal or "").strip()
     if not goal:
         return {"ok": False, "error": "请说明你的长期目标或计划内容。"}
+    if not is_llm_configured(user_id):
+        return {"ok": False, "error": LLM_NOT_CONFIGURED_MESSAGE, "code": "llm_not_configured"}
 
     system = (
         "你是专业的日程规划助手。用户提出长期目标，你需要生成 2～4 道选择题以细化需求。\n"
@@ -319,8 +322,10 @@ def plan_gather_requirements(
         "goal": goal,
         "user_local_time": _plan_local_context(client_context),
     }
-    result = call_llm_json(system=system, user=str(user_msg))
+    result = call_llm_json(system=system, user=str(user_msg), user_id=user_id)
     if not result.ok or not result.data:
+        if is_missing_api_key_error(result.error):
+            return {"ok": False, "error": LLM_NOT_CONFIGURED_MESSAGE, "code": "llm_not_configured"}
         return {"ok": False, "error": "无法生成规划问题，请稍后重试。"}
 
     questions = result.data.get("questions")
@@ -374,12 +379,13 @@ def plan_generate_outline(
     client_context: Optional[Dict[str, Any]] = None,
     refinement: Optional[str] = None,
     previous_outline: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Planning 阶段 2：根据目标与用户选择题答案，生成文字方案/阶段列举。
     refinement 非空时在原方案基础上按用户文字修改，勿要求重做选择题。
     """
-    from .llm import call_llm_json
+    from .llm import LLM_NOT_CONFIGURED_MESSAGE, call_llm_json, is_llm_configured, is_missing_api_key_error
 
     goal = (goal or "").strip()
     if not goal:
@@ -388,6 +394,8 @@ def plan_generate_outline(
         return {"ok": False, "error": "缺少选择题答案。"}
     if not refinement and not answers:
         return {"ok": False, "error": "缺少选择题答案。"}
+    if not is_llm_configured(user_id):
+        return {"ok": False, "error": LLM_NOT_CONFIGURED_MESSAGE, "code": "llm_not_configured"}
 
     system = (
         "你是专业的日程规划助手。根据用户目标与选择题答案，输出阶段性文字方案（不落具体日程）。\n"
@@ -418,8 +426,10 @@ def plan_generate_outline(
         user_msg["refinement"] = refinement.strip()
     if previous_outline:
         user_msg["previous_outline"] = previous_outline
-    result = call_llm_json(system=system, user=str(user_msg))
+    result = call_llm_json(system=system, user=str(user_msg), user_id=user_id)
     if not result.ok or not result.data:
+        if is_missing_api_key_error(result.error):
+            return {"ok": False, "error": LLM_NOT_CONFIGURED_MESSAGE, "code": "llm_not_configured"}
         return {"ok": False, "error": "方案生成失败，请稍后重试。"}
 
     data = result.data
@@ -494,17 +504,20 @@ def plan_schedule_tasks(
     client_context: Optional[Dict[str, Any]] = None,
     refinement: Optional[str] = None,
     previous_tasks: Optional[List[Dict[str, Any]]] = None,
+    user_id: Optional[str] = None,
 ) -> dict:
     """
     Scheduling 阶段：根据已确认方案生成可落库的任务列表。
     任务宜少；todo 可含 due_at 与 subtasks，勿与 ddl 重复表达截止。
     """
-    from .llm import call_llm_json
+    from .llm import LLM_NOT_CONFIGURED_MESSAGE, call_llm_json, is_llm_configured, is_missing_api_key_error
 
     if not (goal or "").strip():
         return {"ok": False, "error": "缺少规划目标。"}
     if not isinstance(phases, list) or not phases:
         return {"ok": False, "error": "缺少方案阶段。"}
+    if not is_llm_configured(user_id):
+        return {"ok": False, "error": LLM_NOT_CONFIGURED_MESSAGE, "code": "llm_not_configured"}
 
     system = (
         "你是日程排程助手。根据已确认的长期方案，生成精简、可创建的任务列表。\n"
@@ -542,8 +555,10 @@ def plan_schedule_tasks(
         user_msg["refinement"] = refinement.strip()
     if previous_tasks:
         user_msg["previous_tasks"] = previous_tasks
-    result = call_llm_json(system=system, user=str(user_msg))
+    result = call_llm_json(system=system, user=str(user_msg), user_id=user_id)
     if not result.ok or not result.data:
+        if is_missing_api_key_error(result.error):
+            return {"ok": False, "error": LLM_NOT_CONFIGURED_MESSAGE, "code": "llm_not_configured"}
         return {"ok": False, "error": "日程生成失败，请稍后重试。"}
 
     tasks = result.data.get("tasks")
