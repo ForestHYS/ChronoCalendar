@@ -615,9 +615,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                         ? subtasks.length
                         : 0;
                     final dueAt = t['due_at'] as String?;
-                    final dueLabel = dueAt != null
-                        ? dueAt.substring(0, 10) // 只显示日期部分
-                        : null;
+                    final dueLabel = dueAt?.substring(0, 10); // 只显示日期部分
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Row(

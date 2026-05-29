@@ -277,6 +277,7 @@ class ReminderScheduler with WidgetsBindingObserver {
     Future.microtask(() {
       final c = rootNavigatorKey.currentContext;
       if (c == null) return;
+      if (!c.mounted) return;
       ReminderSheet.show(c, task);
     });
   }
