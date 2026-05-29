@@ -7,6 +7,11 @@ from tasks.views import err, ok
 
 from .graph import build_graph
 from .history import prepare_conversation_context
+from .plan_interaction import (
+    get_active_plan_state,
+    handle_plan_interaction,
+    handle_plan_text_message,
+)
 from .models import AgentMessage, AgentSession, ApprovalRequest
 from .serializers import AgentMessageInSerializer, AgentMessageOutSerializer, AgentSessionSerializer
 from .registry import run_skill
@@ -50,23 +55,51 @@ class AgentMessageCreateView(APIView):
 
         text = ins.validated_data["text"]
         client_context = ins.validated_data.get("client_context") or {}
+        interaction = ins.validated_data.get("interaction")
 
         history_summary, chat_history = prepare_conversation_context(session)
 
         try:
-            graph = _get_graph()
-            state = {
-                "user_id": str(request.user.id),
-                "session_id": str(session.id),
-                "input_text": text,
-                "client_context": client_context,
-                "chat_history": chat_history,
-                "history_summary": history_summary or "",
-            }
-            out = graph.invoke(state)
-            resp = out.get("response") if isinstance(out, dict) else None
-            if not isinstance(resp, dict):
-                resp = {"type": "message", "text": "系统繁忙，请稍后重试。"}
+            if isinstance(interaction, dict) and interaction.get("type"):
+                resp = handle_plan_interaction(
+                    session=session,
+                    interaction=interaction,
+                    client_context=client_context,
+                )
+            else:
+                active_plan = get_active_plan_state(session, for_text_intercept=True)
+
+                def _run_graph() -> dict:
+                    graph = _get_graph()
+                    state = {
+                        "user_id": str(request.user.id),
+                        "session_id": str(session.id),
+                        "input_text": text,
+                        "client_context": client_context,
+                        "chat_history": chat_history,
+                        "history_summary": history_summary or "",
+                    }
+                    out = graph.invoke(state)
+                    result = out.get("response") if isinstance(out, dict) else None
+                    if not isinstance(result, dict):
+                        return {"type": "message", "text": "系统繁忙，请稍后重试。"}
+                    return result
+
+                if active_plan:
+                    plan_resp = handle_plan_text_message(
+                        session=session,
+                        user_text=text,
+                        active_plan=active_plan,
+                        chat_history=chat_history,
+                        client_context=client_context,
+                        run_general_agent=_run_graph,
+                    )
+                    if plan_resp is not None:
+                        resp = plan_resp
+                    else:
+                        resp = _run_graph()
+                else:
+                    resp = _run_graph()
         except Exception:
             # Agent 不应因 LLM/解析失败导致 500；统一降级为可读提示
             resp = {

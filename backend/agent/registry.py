@@ -61,9 +61,72 @@ def _run_delete_task(user_id: str, **kw: Any) -> dict:
     return tools.execute_delete_task(user_id=user_id, **kw)
 
 
-def _run_generate_plan(user_id: str, **kw: Any) -> dict:
+def _run_plan_gather(user_id: str, **kw: Any) -> dict:
+    _ = user_id
     ctx = kw.pop("client_context", None)
-    return tools.generate_long_term_plan(user_id=user_id, client_context=ctx, **kw)
+    return tools.plan_gather_requirements(client_context=ctx, **kw)
+
+
+def _run_plan_outline(user_id: str, **kw: Any) -> dict:
+    _ = user_id
+    ctx = kw.pop("client_context", None)
+    return tools.plan_generate_outline(client_context=ctx, **kw)
+
+
+def _run_plan_schedule(user_id: str, **kw: Any) -> dict:
+    _ = user_id
+    ctx = kw.pop("client_context", None)
+    return tools.plan_schedule_tasks(client_context=ctx, **kw)
+
+
+def _validate_plan_gather(args: dict) -> dict:
+    goal = str(args.get("goal") or "").strip()
+    if not goal:
+        raise ValueError("goal 必填")
+    return {"goal": goal}
+
+
+def _validate_plan_outline(args: dict) -> dict:
+    goal = str(args.get("goal") or "").strip()
+    if not goal:
+        raise ValueError("goal 必填")
+    answers = args.get("answers")
+    if not isinstance(answers, dict) or not answers:
+        raise ValueError("answers 必填")
+    return {"goal": goal, "answers": answers}
+
+
+def _validate_plan_schedule(args: dict) -> dict:
+    goal = str(args.get("goal") or "").strip()
+    plan_title = str(args.get("plan_title") or "").strip()
+    outline_text = str(args.get("outline_text") or "").strip()
+    phases = args.get("phases")
+    start_date = str(args.get("start_date") or "").strip()
+    end_date = str(args.get("end_date") or "").strip()
+    if not goal:
+        raise ValueError("goal 必填")
+    if not plan_title:
+        raise ValueError("plan_title 必填")
+    if not outline_text:
+        raise ValueError("outline_text 必填")
+    if not isinstance(phases, list) or not phases:
+        raise ValueError("phases 必填")
+    if not start_date or not end_date:
+        raise ValueError("start_date 和 end_date 必填")
+    try:
+        daily_hours = float(args.get("daily_hours") or 2.0)
+    except (TypeError, ValueError):
+        daily_hours = 2.0
+    daily_hours = max(0.5, min(daily_hours, 8.0))
+    return {
+        "goal": goal,
+        "plan_title": plan_title,
+        "outline_text": outline_text,
+        "phases": phases,
+        "start_date": start_date,
+        "end_date": end_date,
+        "daily_hours": daily_hours,
+    }
 
 
 def _validate_search_tasks(args: dict) -> dict:
@@ -122,29 +185,6 @@ def _validate_delete_task(args: dict) -> dict:
     return {"task_id": str(tid)}
 
 
-def _validate_generate_plan(args: dict) -> dict:
-    goal = str(args.get("goal") or "").strip()
-    if not goal:
-        raise ValueError("goal 必填")
-    start_date = str(args.get("start_date") or "").strip()
-    end_date = str(args.get("end_date") or "").strip()
-    if not start_date or not end_date:
-        raise ValueError("start_date 和 end_date 必填")
-    try:
-        daily_hours = float(args.get("daily_hours") or 2.0)
-    except (TypeError, ValueError):
-        daily_hours = 2.0
-    daily_hours = max(0.5, min(daily_hours, 8.0))
-    create_immediately = bool(args.get("create_immediately", False))
-    return {
-        "goal": goal,
-        "start_date": start_date,
-        "end_date": end_date,
-        "daily_hours": daily_hours,
-        "create_immediately": create_immediately,
-    }
-
-
 SKILLS: Dict[str, Skill] = {
     "search_tasks": Skill(
         name="search_tasks",
@@ -192,18 +232,43 @@ SKILLS: Dict[str, Skill] = {
         args_hint='{"task_id":"uuid"}',
         handler=_run_delete_task,
     ),
-    "generate_long_term_plan": Skill(
-        name="generate_long_term_plan",
+    "plan_gather_requirements": Skill(
+        name="plan_gather_requirements",
         description=(
-            "根据用户的长期目标（如学习计划、项目安排）和时间范围，自动生成一组待办任务（todo 类型），"
-            "每个待办任务下包含具体可操作的子任务（subtasks），形成阶段化的长期规划。"
-            "若用户明确要求'直接添加/创建/加入日程'，则传 create_immediately=true，任务直接落库；"
-            "否则传 create_immediately=false，返回预览供用户确认。"
+            "长期规划 Planning 第一步：根据用户目标生成 2～4 道选择题，"
+            "让用户在对话框点选细化需求（周期、每日时长、侧重点等）。"
+            "用户首次提出长期规划/学习计划时调用，勿直接生成任务。"
         ),
         risk="low",
         requires_approval=False,
-        args_hint='{"goal":"目标描述","start_date":"开始日期ISO","end_date":"结束日期ISO","daily_hours":2.0,"create_immediately":false}',
-        handler=_run_generate_plan,
+        args_hint='{"goal":"用户长期目标描述"}',
+        handler=_run_plan_gather,
+    ),
+    "plan_generate_outline": Skill(
+        name="plan_generate_outline",
+        description=(
+            "长期规划 Planning 第二步：根据目标与用户已提交的选择题答案，"
+            "生成文字方案与阶段列举，供用户确认后再排程。"
+        ),
+        risk="low",
+        requires_approval=False,
+        args_hint='{"goal":"目标","answers":{"题目id":"选项id或选项id数组"}}',
+        handler=_run_plan_outline,
+    ),
+    "plan_schedule_tasks": Skill(
+        name="plan_schedule_tasks",
+        description=(
+            "长期规划 Scheduling 阶段：用户确认文字方案后，生成精简任务列表（通常 3～8 条）。"
+            "优先 1 个 todo（含 due_at 与多个 subtasks）覆盖阶段；"
+            "有 todo 时勿再建 ddl；block 仅用于固定每日时段；三种类型不必混合。"
+        ),
+        risk="low",
+        requires_approval=False,
+        args_hint=(
+            '{"goal","plan_title","outline_text","phases":[...],'
+            '"start_date","end_date","daily_hours"}'
+        ),
+        handler=_run_plan_schedule,
     ),
 }
 
@@ -225,8 +290,12 @@ def normalize_args(skill_name: str, raw: dict) -> dict:
         return _validate_conflict(raw)
     if skill_name == "delete_task":
         return _validate_delete_task(raw)
-    if skill_name == "generate_long_term_plan":
-        return _validate_generate_plan(raw)
+    if skill_name == "plan_gather_requirements":
+        return _validate_plan_gather(raw)
+    if skill_name == "plan_generate_outline":
+        return _validate_plan_outline(raw)
+    if skill_name == "plan_schedule_tasks":
+        return _validate_plan_schedule(raw)
     raise ValueError(f"unknown skill: {skill_name}")
 
 
@@ -240,7 +309,13 @@ def run_skill(skill_name: str, user_id: str, raw_args: dict) -> dict:
         return {"ok": False, "error": str(e)}
     ctx = raw_args.get("client_context") if isinstance(raw_args.get("client_context"), dict) else None
     try:
-        if skill_name in ("generate_long_term_plan", "search_tasks") and ctx is not None:
+        plan_ctx_skills = (
+            "plan_gather_requirements",
+            "plan_generate_outline",
+            "plan_schedule_tasks",
+            "search_tasks",
+        )
+        if skill_name in plan_ctx_skills and ctx is not None:
             return skill.handler(user_id, **args, client_context=ctx)
         return skill.handler(user_id, **args)
     except Exception as e:

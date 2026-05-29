@@ -23,6 +23,7 @@ class AgentRepository {
     required String sessionId,
     required String text,
     Map<String, dynamic>? clientContext,
+    Map<String, dynamic>? interaction,
   }) async {
     final data = await _api.request(
       'POST',
@@ -31,6 +32,7 @@ class AgentRepository {
         'text': text,
         // ignore: use_null_aware_elements
         if (clientContext != null) 'client_context': clientContext,
+        if (interaction != null) 'interaction': interaction,
       },
       auth: true,
     );

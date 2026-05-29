@@ -5,6 +5,11 @@ from typing import Any, Dict, List, Optional, TypedDict
 from langgraph.graph import END, StateGraph
 
 from .history import build_llm_message_list
+from .plan_interaction import (
+    compose_plan_outline,
+    compose_plan_questions,
+    compose_schedule_preview,
+)
 from .llm import call_llm_json, call_llm_text
 from .registry import get_skill, normalize_args, skills_prompt_for
 from .models import AgentSession, ApprovalRequest
@@ -28,6 +33,8 @@ def _terminal_response(resp: Optional[dict]) -> bool:
         "open_editor",
         "query_result",
         "approval_required",
+        "plan_questions",
+        "plan_outline",
         "plan_preview",
     )
 
@@ -96,6 +103,7 @@ def _classify_intent(state: AgentState) -> AgentState:
         "- query_tasks：查询、搜索、列出已有任务，或问某天有什么安排\n"
         "- plan：长期规划、多天的学习计划/项目安排\n"
         "- delete：删除任务\n"
+        "若用户正在长期规划流程中但明确退出或转向其他意图，由规划续聊处理；此处仍按真实意图分类。\n"
     )
     user_payload = {
         "user_local_time": user_now_payload(ctx),
@@ -209,13 +217,17 @@ def _prompt_query_tasks(ctx: dict) -> str:
 
 def _prompt_plan(ctx: dict) -> str:
     return (
-        "你是长期规划助手。\n"
+        "你是长期规划助手，采用 Planning → Scheduling 两阶段流程。\n"
         + _time_context_block(ctx)
-        + "\n可用工具：\n"
-        + skills_prompt_for(["generate_long_term_plan"])
+        + "\n当前处于 Planning 第一步：用户首次提出长期规划时，"
+        "须调用 plan_gather_requirements 生成选择题，勿直接生成任务或方案。\n"
+        "用户在规划中途的文字修改、退出由专用续聊处理，此处仅处理新发起的规划。\n"
+        "可用工具：\n"
+        + skills_prompt_for(["plan_gather_requirements"])
         + "\n规则：\n"
-        "- 根据用户本地日期推算 start_date、end_date（YYYY-MM-DD）。\n"
-        "- 用户明确要直接加入日程时 create_immediately=true，否则 false。\n"
+        "- goal 取用户目标描述（可结合上下文补全）。\n"
+        "- 用户提交选择题答案、确认方案等后续步骤由前端结构化交互完成，"
+        "此时勿重复调用 plan_gather_requirements。\n"
         + _decision_output_formats()
     )
 
@@ -481,42 +493,34 @@ def _compose_response(state: AgentState) -> AgentState:
                 }
             return state
 
-        if tool_name == "generate_long_term_plan":
+        if tool_name == "plan_gather_requirements":
             if not out.get("ok"):
                 state["response"] = {
                     "type": "message",
-                    "text": out.get("error") or "规划生成失败，请稍后再试。",
+                    "text": out.get("error") or "无法生成规划问题。",
                 }
                 return state
-            conflicts = out.get("conflicts") or []
-            plan_title = out.get("plan_title") or "长期规划"
-            if out.get("created_immediately"):
-                created_count = out.get("total_created", 0)
-                error_count = len(out.get("errors") or [])
+            state["response"] = compose_plan_questions(out)
+            return state
+
+        if tool_name == "plan_generate_outline":
+            if not out.get("ok"):
                 state["response"] = {
                     "type": "message",
-                    "text": (
-                        f"已成功将「{plan_title}」的 {created_count} 个任务添加到你的日程中！"
-                        + (f"（{error_count} 个任务创建失败）" if error_count else "")
-                    ),
-                    "refresh_tasks": True,
+                    "text": out.get("error") or "方案生成失败。",
                 }
                 return state
-            tasks = out.get("tasks") or []
-            total = out.get("total") or len(tasks)
-            preview_hint = (
-                f"（注意：{len(conflicts)} 个任务与现有日程有冲突）" if conflicts else ""
-            )
-            state["response"] = {
-                "type": "plan_preview",
-                "plan_title": plan_title,
-                "tasks": tasks,
-                "conflicts": conflicts,
-                "message": (
-                    f"已为你生成「{plan_title}」，共 {total} 个待办任务{preview_hint}。"
-                    "请查看下方计划预览，确认无误后点击「创建全部任务」批量生成日程。"
-                ),
-            }
+            state["response"] = compose_plan_outline(out)
+            return state
+
+        if tool_name == "plan_schedule_tasks":
+            if not out.get("ok"):
+                state["response"] = {
+                    "type": "message",
+                    "text": out.get("error") or "日程生成失败。",
+                }
+                return state
+            state["response"] = compose_schedule_preview(out)
             return state
 
     logger.warning("compose_response fallback: last_tool=%s", last_tool)

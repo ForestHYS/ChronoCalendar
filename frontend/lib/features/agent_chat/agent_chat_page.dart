@@ -52,7 +52,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                     json['type'] == 'open_editor' ||
                     json['type'] == 'approval_required' ||
                     (json['type'] == 'plan_preview' &&
-                        json['plan_confirmed'] == true);
+                        json['plan_confirmed'] == true) ||
+                    (json['type'] == 'plan_questions' &&
+                        json['plan_answered'] == true) ||
+                    (json['type'] == 'plan_outline' &&
+                        json['outline_confirmed'] == true);
                 restored.add(
                   _ChatItem.assistant(
                     json,
@@ -96,6 +100,59 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     if (_sessionId != null) return;
     final id = await ref.read(agentRepositoryProvider).createSession();
     _sessionId = id;
+  }
+
+  Future<void> _sendInteraction({
+    required String userLabel,
+    required Map<String, dynamic> interaction,
+  }) async {
+    if (_sending) return;
+    setState(() {
+      _sending = true;
+      _items.add(_ChatItem.user(userLabel));
+    });
+    try {
+      await _ensureSession();
+      final sent = await ref.read(agentRepositoryProvider).sendMessage(
+            sessionId: _sessionId!,
+            text: userLabel,
+            clientContext: buildAgentClientContext(),
+            interaction: interaction,
+          );
+      final resp = sent['response'] as Map<String, dynamic>? ?? {};
+      setState(() {
+        _items.add(
+          _ChatItem.assistant(
+            resp,
+            messageId: sent['assistant_message_id'] as String?,
+          ),
+        );
+      });
+      if (resp['refresh_tasks'] == true) {
+        ref.read(taskRepositoryProvider).refreshTasks();
+      }
+      _scrollToBottom();
+    } catch (e) {
+      if (mounted) await showAppErrorDialog(context, title: '发送失败', error: e);
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  void _markAssistantPayload(String messageId, Map<String, dynamic> patch) {
+    setState(() {
+      final idx = _items.indexWhere(
+        (it) => !it.isUser && it.messageId == messageId,
+      );
+      if (idx < 0) return;
+      final p = _items[idx].payload;
+      if (p == null) return;
+      _items[idx] = _ChatItem.assistant(
+        {...p, ...patch},
+        messageId: messageId,
+        initialSubmitted: true,
+      );
+    });
   }
 
   Future<void> _send() async {
@@ -229,18 +286,13 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                             onOpenEditor: _openEditorFromDraft,
                             onFollowUp: _appendAssistantPayload,
                             onPlanConfirmed: (messageId) {
-                              setState(() {
-                                final idx = _items.indexOf(it);
-                                if (idx < 0) return;
-                                final p = _items[idx].payload;
-                                if (p == null) return;
-                                _items[idx] = _ChatItem.assistant(
-                                  {...p, 'plan_confirmed': true},
-                                  messageId: messageId,
-                                  initialSubmitted: true,
-                                );
-                              });
+                              _markAssistantPayload(
+                                messageId,
+                                {'plan_confirmed': true},
+                              );
                             },
+                            onPlanInteractionDone: _markAssistantPayload,
+                            onSendInteraction: _sendInteraction,
                           ),
                   ),
                 );
@@ -351,15 +403,23 @@ class _AssistantCard extends ConsumerStatefulWidget {
     required this.payload,
     required this.onOpenEditor,
     required this.onFollowUp,
+    required this.onSendInteraction,
     this.messageId,
     this.initialSubmitted = false,
     this.onPlanConfirmed,
+    this.onPlanInteractionDone,
   });
   final Map<String, dynamic> payload;
   final String? messageId;
   final void Function(Map<String, dynamic> draft) onOpenEditor;
   final void Function(Map<String, dynamic> payload) onFollowUp;
+  final Future<void> Function({
+    required String userLabel,
+    required Map<String, dynamic> interaction,
+  }) onSendInteraction;
   final void Function(String messageId)? onPlanConfirmed;
+  final void Function(String messageId, Map<String, dynamic> patch)?
+      onPlanInteractionDone;
   final bool initialSubmitted;
 
   @override
@@ -571,6 +631,34 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
       return _AgentTaskListCard(text: text, items: items);
     }
 
+    if (type == 'plan_questions') {
+      return _PlanQuestionsCard(
+        payload: payload,
+        messageId: widget.messageId,
+        initialSubmitted:
+            _submitted ||
+            widget.initialSubmitted ||
+            payload['plan_answered'] == true,
+        onSendInteraction: widget.onSendInteraction,
+        onFollowUp: onFollowUp,
+        onDone: widget.onPlanInteractionDone,
+      );
+    }
+
+    if (type == 'plan_outline') {
+      return _PlanOutlineCard(
+        payload: payload,
+        messageId: widget.messageId,
+        initialSubmitted:
+            _submitted ||
+            widget.initialSubmitted ||
+            payload['outline_confirmed'] == true,
+        onSendInteraction: widget.onSendInteraction,
+        onFollowUp: onFollowUp,
+        onDone: widget.onPlanInteractionDone,
+      );
+    }
+
     if (type == 'plan_preview') {
       return _PlanPreviewCard(
         payload: payload,
@@ -733,6 +821,424 @@ class _AgentTaskListRow extends ConsumerWidget {
   }
 }
 
+String _planTaskTypeLabel(String? type) {
+  switch (type) {
+    case 'block':
+      return '固定时段';
+    case 'ddl':
+      return '截止';
+    case 'todo':
+      return '待办';
+    default:
+      return type ?? '';
+  }
+}
+
+String? _planTaskTimeLabel(Map<String, dynamic> task) {
+  final typ = task['type'] as String?;
+  if (typ == 'block') {
+    final s = task['start_at'] as String?;
+    final e = task['end_at'] as String?;
+    if (s != null && e != null) {
+      final ss = s.length >= 16 ? s.substring(0, 16).replaceAll('T', ' ') : s;
+      final ee = e.length >= 16 ? e.substring(11, 16) : e;
+      return '$ss — $ee';
+    }
+  }
+  final due = task['due_at'] as String?;
+  if (due != null && due.length >= 10) {
+    return due.substring(0, 10);
+  }
+  return null;
+}
+
+class _PlanQuestionsCard extends StatefulWidget {
+  const _PlanQuestionsCard({
+    required this.payload,
+    required this.onSendInteraction,
+    this.messageId,
+    this.initialSubmitted = false,
+    this.onFollowUp,
+    this.onDone,
+  });
+
+  final Map<String, dynamic> payload;
+  final String? messageId;
+  final bool initialSubmitted;
+  final Future<void> Function({
+    required String userLabel,
+    required Map<String, dynamic> interaction,
+  }) onSendInteraction;
+  final void Function(Map<String, dynamic> payload)? onFollowUp;
+  final void Function(String messageId, Map<String, dynamic> patch)? onDone;
+
+  @override
+  State<_PlanQuestionsCard> createState() => _PlanQuestionsCardState();
+}
+
+class _PlanQuestionsCardState extends State<_PlanQuestionsCard> {
+  late final List<Map<String, dynamic>> _questions;
+  final Map<String, dynamic> _answers = {};
+  late bool _submitted;
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final qs = widget.payload['questions'];
+    _questions = (qs is List)
+        ? qs.whereType<Map<String, dynamic>>().toList()
+        : <Map<String, dynamic>>[];
+    _submitted =
+        widget.initialSubmitted ||
+        widget.payload['plan_answered'] == true;
+  }
+
+  bool get _allAnswered {
+    for (final q in _questions) {
+      final id = q['id'] as String?;
+      if (id == null || id.isEmpty) continue;
+      final v = _answers[id];
+      if (v == null) return false;
+      if (v is List && v.isEmpty) return false;
+      if (v is String && v.isEmpty) return false;
+    }
+    return _questions.isNotEmpty;
+  }
+
+  void _pickOption(Map<String, dynamic> q, String optionId) {
+    if (_submitted) return;
+    final id = q['id'] as String? ?? '';
+    final multi = q['multi'] == true;
+    setState(() {
+      if (multi) {
+        final cur = (_answers[id] is List)
+            ? List<String>.from(_answers[id] as List)
+            : <String>[];
+        if (cur.contains(optionId)) {
+          cur.remove(optionId);
+        } else {
+          cur.add(optionId);
+        }
+        _answers[id] = cur;
+      } else {
+        _answers[id] = optionId;
+      }
+    });
+  }
+
+  bool _isSelected(Map<String, dynamic> q, String optionId) {
+    final id = q['id'] as String? ?? '';
+    final v = _answers[id];
+    if (q['multi'] == true) {
+      return v is List && v.contains(optionId);
+    }
+    return v == optionId;
+  }
+
+  Future<void> _submit() async {
+    if (_submitted || _submitting || !_allAnswered) return;
+    setState(() => _submitting = true);
+    try {
+      final planContext = widget.payload['plan_context'];
+      await widget.onSendInteraction(
+        userLabel: '已提交规划选项',
+        interaction: {
+          'type': 'plan_answers',
+          'source_message_id': widget.messageId,
+          'answers': Map<String, dynamic>.from(_answers),
+          if (planContext is Map<String, dynamic>)
+            'plan_context': planContext,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _submitted = true;
+        _submitting = false;
+      });
+      final mid = widget.messageId;
+      if (mid != null && mid.isNotEmpty) {
+        widget.onDone?.call(mid, {'plan_answered': true});
+      }
+    } catch (_) {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final message = widget.payload['message'] as String? ?? '';
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 380),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                '细化规划需求',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (message.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  message,
+                  style: const TextStyle(color: AppColors.onSurfaceVariant),
+                ),
+              ],
+              const SizedBox(height: 10),
+              ..._questions.map((q) {
+                final qText = q['text'] as String? ?? '';
+                final options = q['options'];
+                final opts = (options is List)
+                    ? options.whereType<Map<String, dynamic>>().toList()
+                    : <Map<String, dynamic>>[];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        qText,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: opts.map((o) {
+                          final oid = o['id'] as String? ?? '';
+                          final label = o['label'] as String? ?? oid;
+                          final selected = _isSelected(q, oid);
+                          return FilterChip(
+                            label: Text(label),
+                            selected: selected,
+                            onSelected: _submitted
+                                ? null
+                                : (_) => _pickOption(q, oid),
+                          );
+                        }).toList(),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              if (_submitted)
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle_outline,
+                      size: 16,
+                      color: AppColors.onSurfaceVariant,
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      '已提交选项',
+                      style: TextStyle(color: AppColors.onSurfaceVariant),
+                    ),
+                  ],
+                )
+              else
+                FilledButton(
+                  onPressed: !_allAnswered || _submitting ? null : _submit,
+                  child: _submitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('确认提交'),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PlanOutlineCard extends StatefulWidget {
+  const _PlanOutlineCard({
+    required this.payload,
+    required this.onSendInteraction,
+    this.messageId,
+    this.initialSubmitted = false,
+    this.onFollowUp,
+    this.onDone,
+  });
+
+  final Map<String, dynamic> payload;
+  final String? messageId;
+  final bool initialSubmitted;
+  final Future<void> Function({
+    required String userLabel,
+    required Map<String, dynamic> interaction,
+  }) onSendInteraction;
+  final void Function(Map<String, dynamic> payload)? onFollowUp;
+  final void Function(String messageId, Map<String, dynamic> patch)? onDone;
+
+  @override
+  State<_PlanOutlineCard> createState() => _PlanOutlineCardState();
+}
+
+class _PlanOutlineCardState extends State<_PlanOutlineCard> {
+  late bool _submitted;
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _submitted =
+        widget.initialSubmitted ||
+        widget.payload['outline_confirmed'] == true;
+  }
+
+  Future<void> _confirm() async {
+    if (_submitted || _submitting) return;
+    setState(() => _submitting = true);
+    try {
+      final planContext = widget.payload['plan_context'];
+      await widget.onSendInteraction(
+        userLabel: '确认方案，生成日程',
+        interaction: {
+          'type': 'confirm_outline',
+          'source_message_id': widget.messageId,
+          if (planContext is Map<String, dynamic>)
+            'plan_context': planContext,
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _submitted = true;
+        _submitting = false;
+      });
+      final mid = widget.messageId;
+      if (mid != null && mid.isNotEmpty) {
+        widget.onDone?.call(mid, {'outline_confirmed': true});
+      }
+    } catch (_) {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final planTitle = widget.payload['plan_title'] as String? ?? '长期规划';
+    final message = widget.payload['message'] as String? ?? '';
+    final outlineText = widget.payload['outline_text'] as String? ?? '';
+    final phases = widget.payload['phases'];
+    final phaseList = (phases is List)
+        ? phases.whereType<Map<String, dynamic>>().toList()
+        : <Map<String, dynamic>>[];
+    final summary = widget.payload['planned_schedule_summary'];
+    final summaryMap =
+        summary is Map<String, dynamic> ? summary : <String, dynamic>{};
+    final todoN = summaryMap['todo_count'];
+    final blockN = summaryMap['block_count'];
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 380),
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                planTitle,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              if (message.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Text(
+                  message,
+                  style: const TextStyle(color: AppColors.onSurfaceVariant),
+                ),
+              ],
+              if (outlineText.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(outlineText),
+              ],
+              if (todoN != null || blockN != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  '预计排程：约 ${todoN ?? 0} 个待办、${blockN ?? 0} 个固定时段',
+                  style: const TextStyle(
+                    color: AppColors.onSurfaceVariant,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+              if (phaseList.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                const Text(
+                  '阶段安排',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                ...phaseList.map((p) {
+                  final title = p['title'] as String? ?? '';
+                  final desc = p['description'] as String? ?? '';
+                  final hint = p['duration_hint'] as String? ?? '';
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          hint.isNotEmpty ? '$title（$hint）' : title,
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                        if (desc.isNotEmpty)
+                          Text(
+                            desc,
+                            style: const TextStyle(
+                              color: AppColors.onSurfaceVariant,
+                              fontSize: 13,
+                            ),
+                          ),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+              const SizedBox(height: 12),
+              if (_submitted)
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.check_circle_outline,
+                      size: 16,
+                      color: AppColors.onSurfaceVariant,
+                    ),
+                    SizedBox(width: 6),
+                    Text(
+                      '已确认方案',
+                      style: TextStyle(color: AppColors.onSurfaceVariant),
+                    ),
+                  ],
+                )
+              else
+                FilledButton(
+                  onPressed: _submitting ? null : _confirm,
+                  child: _submitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('确认方案，生成日程'),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PlanPreviewCard extends ConsumerStatefulWidget {
   const _PlanPreviewCard({
     required this.payload,
@@ -890,15 +1396,19 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
                     itemBuilder: (context, index) {
                       final t = _taskList[index];
                       final title = t['title'] as String? ?? '';
+                      final typ = t['type'] as String?;
+                      final typeLabel = _planTaskTypeLabel(typ);
                       final subtasks = t['subtasks'];
                       final subtaskCount =
                           (subtasks is List) ? subtasks.length : 0;
-                      final dueAt = t['due_at'] as String?;
-                      final dueLabel =
-                          dueAt != null && dueAt.length >= 10
-                          ? dueAt.substring(0, 10)
-                          : dueAt;
+                      final timeLabel = _planTaskTimeLabel(t);
                       final checked = _selected.contains(index);
+                      final meta = [
+                        if (typeLabel.isNotEmpty) typeLabel,
+                        if (timeLabel != null && timeLabel.isNotEmpty)
+                          timeLabel,
+                        if (subtaskCount > 0) '$subtaskCount 个子任务',
+                      ].join(' · ');
                       return InkWell(
                         onTap: _submitted ? null : () => _toggle(index),
                         borderRadius: BorderRadius.circular(8),
@@ -931,13 +1441,9 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
                                         fontWeight: FontWeight.w600,
                                       ),
                                     ),
-                                    if (dueLabel != null || subtaskCount > 0)
+                                    if (meta.isNotEmpty)
                                       Text(
-                                        [
-                                          if (dueLabel != null) dueLabel,
-                                          if (subtaskCount > 0)
-                                            '$subtaskCount 个子任务',
-                                        ].join(' · '),
+                                        meta,
                                         style: const TextStyle(
                                           color: AppColors.onSurfaceVariant,
                                           fontSize: 12,

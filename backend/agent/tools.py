@@ -285,87 +285,330 @@ def task_summary_for_approval(*, user_id: str, task_id: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 长期规划工具
+# 长期规划工具（Planning → Scheduling 两阶段）
 # ---------------------------------------------------------------------------
 
-def generate_long_term_plan(
+def _plan_local_context(client_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    return user_now_payload(client_context)
+
+
+def plan_gather_requirements(
     *,
-    user_id: str,
     goal: str,
-    start_date: str,
-    end_date: str,
-    daily_hours: float = 2.0,
-    create_immediately: bool = False,
     client_context: Optional[Dict[str, Any]] = None,
 ) -> dict:
     """
-    调用 LLM 根据目标和时间范围生成长期规划草稿。
-    create_immediately=True 时直接落库创建所有任务并返回结果；
-    否则返回 plan_preview 供前端确认。
+    Planning 阶段 1：根据用户目标生成细化需求的选择题。
     """
     from .llm import call_llm_json
 
-    system = (
-        "你是一个专业的日程规划助手。根据用户提供的目标和时间范围，"
-        "制定详细、合理的长期计划，拆分成若干待办任务（todo 类型），"
-        "每个待办任务下再细化出具体的子任务（subtasks）。\n\n"
-        "输出必须是严格 JSON，格式如下：\n"
-        '{"plan_title": "计划名称", "tasks": [\n'
-        '  {"type": "todo", "title": "阶段/主题名称", "description": "该阶段目标说明", '
-        '"due_at": "ISO8601日期时间（截止时间，精确到当天23:59:59）", '
-        '"expected_minutes": 120, '
-        '"subtasks": [{"title": "具体子任务1"}, {"title": "具体子任务2"}]}\n'
-        "]}\n\n"
-        "规则：\n"
-        "- 按阶段或主题划分待办任务，每个 todo 对应一个独立的学习/工作主题\n"
-        "- 每个 todo 下包含 2-6 个具体可操作的子任务（subtasks）\n"
-        "- expected_minutes 为该 todo 预计总耗时（分钟），每天不超过 daily_hours 小时换算后合理估算\n"
-        "- due_at 在 start_date 到 end_date 之间均匀分布，须为 ISO8601 且带时区偏移（与用户本地一致）\n"
-        "- 任务循序渐进，先基础后进阶\n"
-        "- 子任务标题简洁具体，如'阅读第3章'、'完成练习题 1-10'\n"
-        "- 所有 ISO8601 时间必须包含完整的日期、时间与时区偏移\n"
-    )
+    goal = (goal or "").strip()
+    if not goal:
+        return {"ok": False, "error": "请说明你的长期目标或计划内容。"}
 
-    local = user_now_payload(client_context)
+    system = (
+        "你是专业的日程规划助手。用户提出长期目标，你需要生成 2～4 道选择题以细化需求。\n"
+        "只输出严格 JSON：\n"
+        '{"questions":[{"id":"唯一id","text":"题目","multi":false,'
+        '"options":[{"id":"选项id","label":"展示文案"}]}]}\n\n'
+        "建议覆盖：计划周期、每日可投入时间、侧重点/优先级、任务组织偏好（固定时段 block vs 灵活 todo）。\n"
+        "每题 3～5 个选项，选项 id 用简短英文或数字，label 用中文。\n"
+        "multi=true 表示可多选，默认 false。\n"
+    )
     user_msg = {
         "goal": goal,
-        "start_date": start_date,
-        "end_date": end_date,
-        "daily_hours": daily_hours,
-        "user_local_time": local,
+        "user_local_time": _plan_local_context(client_context),
     }
-
     result = call_llm_json(system=system, user=str(user_msg))
     if not result.ok or not result.data:
-        return {"ok": False, "error": "LLM 规划生成失败，请检查 LLM 配置。"}
+        return {"ok": False, "error": "无法生成规划问题，请稍后重试。"}
 
-    plan = result.data
-    tasks = plan.get("tasks")
-    if not isinstance(tasks, list):
-        return {"ok": False, "error": "LLM 返回格式异常，tasks 字段缺失或类型错误。"}
+    questions = result.data.get("questions")
+    if not isinstance(questions, list) or not questions:
+        return {"ok": False, "error": "规划问题生成格式异常。"}
 
-    plan_title = plan.get("plan_title") or goal
-
-    # create_immediately=True：直接落库，返回创建结果
-    if create_immediately:
-        batch_result = create_tasks_batch(
-            user_id=user_id, tasks=tasks, client_context=client_context
+    cleaned: List[Dict[str, Any]] = []
+    for q in questions[:5]:
+        if not isinstance(q, dict):
+            continue
+        qid = str(q.get("id") or "").strip()
+        text = str(q.get("text") or "").strip()
+        if not qid or not text:
+            continue
+        opts_in = q.get("options")
+        if not isinstance(opts_in, list):
+            continue
+        options = []
+        for o in opts_in[:6]:
+            if not isinstance(o, dict):
+                continue
+            oid = str(o.get("id") or "").strip()
+            label = str(o.get("label") or "").strip()
+            if oid and label:
+                options.append({"id": oid, "label": label})
+        if len(options) < 2:
+            continue
+        cleaned.append(
+            {
+                "id": qid,
+                "text": text,
+                "multi": bool(q.get("multi", False)),
+                "options": options,
+            }
         )
-        return {
-            "ok": True,
-            "created_immediately": True,
-            "plan_title": plan_title,
-            "total_created": batch_result.get("total_created", 0),
-            "created": batch_result.get("created", []),
-            "errors": batch_result.get("errors", []),
-        }
+
+    if not cleaned:
+        return {"ok": False, "error": "规划问题生成格式异常。"}
 
     return {
         "ok": True,
+        "goal": goal,
+        "questions": cleaned,
+    }
+
+
+def plan_generate_outline(
+    *,
+    goal: str,
+    answers: Dict[str, Any],
+    client_context: Optional[Dict[str, Any]] = None,
+    refinement: Optional[str] = None,
+    previous_outline: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """
+    Planning 阶段 2：根据目标与用户选择题答案，生成文字方案/阶段列举。
+    refinement 非空时在原方案基础上按用户文字修改，勿要求重做选择题。
+    """
+    from .llm import call_llm_json
+
+    goal = (goal or "").strip()
+    if not goal:
+        return {"ok": False, "error": "缺少规划目标。"}
+    if not isinstance(answers, dict):
+        return {"ok": False, "error": "缺少选择题答案。"}
+    if not refinement and not answers:
+        return {"ok": False, "error": "缺少选择题答案。"}
+
+    system = (
+        "你是专业的日程规划助手。根据用户目标与选择题答案，输出阶段性文字方案（不落具体日程）。\n"
+        "只输出严格 JSON：\n"
+        '{"plan_title":"计划名称","outline_text":"2～6段中文方案概述，可用换行分段",'
+        '"phases":[{"title":"阶段名","description":"该阶段要做什么","duration_hint":"如第1周"}],'
+        '"start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","daily_hours":2.0,'
+        '"planned_schedule_summary":{"todo_count":1,"block_count":2,"ddl_count":0,'
+        '"summary":"一句说明预计会生成几个 todo/block（如：1个待办含多子任务+每日学习块）"}}\n\n'
+        "规则：\n"
+        "- phases 3～6 项，循序渐进；阶段细节留给后续 subtasks，勿过碎\n"
+        "- planned_schedule_summary 必填：预估排程阶段将生成的 todo_count、block_count（ddl_count 通常 0）\n"
+        "- start_date/end_date 根据答案中的周期推算，基于 user_local_time 的日期\n"
+        "- daily_hours 根据答案估算，0.5～8\n"
+        "- outline_text 清晰可读；在文末或 summary 中点明预计 todo/block 数量\n"
+    )
+    if refinement:
+        system += (
+            "\n用户要求修改已有文字方案。在保留原 answers 约束下按 refinement 调整，"
+            "勿要求用户重做选择题。参考 previous_outline。\n"
+        )
+    user_msg: Dict[str, Any] = {
+        "goal": goal,
+        "answers": answers,
+        "user_local_time": _plan_local_context(client_context),
+    }
+    if refinement:
+        user_msg["refinement"] = refinement.strip()
+    if previous_outline:
+        user_msg["previous_outline"] = previous_outline
+    result = call_llm_json(system=system, user=str(user_msg))
+    if not result.ok or not result.data:
+        return {"ok": False, "error": "方案生成失败，请稍后重试。"}
+
+    data = result.data
+    phases = data.get("phases")
+    if not isinstance(phases, list) or not phases:
+        return {"ok": False, "error": "方案格式异常，缺少阶段列表。"}
+
+    outline_text = str(data.get("outline_text") or "").strip()
+    if not outline_text:
+        return {"ok": False, "error": "方案格式异常，缺少文字说明。"}
+
+    try:
+        daily_hours = float(data.get("daily_hours") or 2.0)
+    except (TypeError, ValueError):
+        daily_hours = 2.0
+    daily_hours = max(0.5, min(daily_hours, 8.0))
+
+    cleaned_phases: List[Dict[str, str]] = []
+    for p in phases[:12]:
+        if not isinstance(p, dict):
+            continue
+        title = str(p.get("title") or "").strip()
+        desc = str(p.get("description") or "").strip()
+        if title:
+            cleaned_phases.append(
+                {
+                    "title": title,
+                    "description": desc,
+                    "duration_hint": str(p.get("duration_hint") or "").strip(),
+                }
+            )
+
+    if not cleaned_phases:
+        return {"ok": False, "error": "方案格式异常。"}
+
+    raw_summary = data.get("planned_schedule_summary")
+    planned_summary: Dict[str, Any] = {}
+    if isinstance(raw_summary, dict):
+        try:
+            planned_summary = {
+                "todo_count": max(0, int(raw_summary.get("todo_count") or 0)),
+                "block_count": max(0, int(raw_summary.get("block_count") or 0)),
+                "ddl_count": max(0, int(raw_summary.get("ddl_count") or 0)),
+                "summary": str(raw_summary.get("summary") or "").strip(),
+            }
+        except (TypeError, ValueError):
+            planned_summary = {}
+
+    return {
+        "ok": True,
+        "plan_title": str(data.get("plan_title") or goal).strip() or goal,
+        "outline_text": outline_text,
+        "phases": cleaned_phases,
+        "start_date": str(data.get("start_date") or "").strip(),
+        "end_date": str(data.get("end_date") or "").strip(),
+        "daily_hours": daily_hours,
+        "goal": goal,
+        "answers": answers,
+        "planned_schedule_summary": planned_summary,
+    }
+
+
+def plan_schedule_tasks(
+    *,
+    goal: str,
+    plan_title: str,
+    outline_text: str,
+    phases: List[Dict[str, Any]],
+    start_date: str,
+    end_date: str,
+    daily_hours: float = 2.0,
+    client_context: Optional[Dict[str, Any]] = None,
+    refinement: Optional[str] = None,
+    previous_tasks: Optional[List[Dict[str, Any]]] = None,
+) -> dict:
+    """
+    Scheduling 阶段：根据已确认方案生成可落库的任务列表。
+    任务宜少；todo 可含 due_at 与 subtasks，勿与 ddl 重复表达截止。
+    """
+    from .llm import call_llm_json
+
+    if not (goal or "").strip():
+        return {"ok": False, "error": "缺少规划目标。"}
+    if not isinstance(phases, list) or not phases:
+        return {"ok": False, "error": "缺少方案阶段。"}
+
+    system = (
+        "你是日程排程助手。根据已确认的长期方案，生成精简、可创建的任务列表。\n"
+        "输出严格 JSON：\n"
+        '{"plan_title":"...", "tasks":[...]}\n\n'
+        "tasks 每项 type 必为 block|ddl|todo 之一：\n"
+        "- block：固定学习/工作时段，需 start_at+end_at（ISO8601 带时区）\n"
+        "- ddl：单一硬性截止里程碑，需 due_at\n"
+        "- todo：主题待办，可 due_at（截止）、expected_minutes、subtasks\n\n"
+        "排程原则：\n"
+        "- 任务总数不宜过多：整个计划通常 3～8 条 tasks，严禁拆成十几条或更多\n"
+        "- 任务标题应该简洁明了，不要过长（详细说明写入任务描述），不要依赖上下文才能理解。例如：标题可以是 “机器学习第一章” 而不是 “第一章：支持向量机以及.....” \n"
+        "- 默认优先少数 todo：用 1 条 todo（带 due_at + 5～12 个 subtasks）覆盖多阶段步骤，子任务对应方案阶段，勿为每个阶段各建一条 task；多个todo对应不同的方面，如用户要求一周规划时，可用多个todo对应不同学科或项目。\n"
+        "- 三种类型可以混合，但不必强行混合\n"
+        "- 若已用 todo 表达阶段与截止，不要再建 ddl（todo 的 due_at 即截止，二者勿重复）\n"
+        "- 时间分布在 start_date～end_date，ISO8601 须含时区偏移（与用户本地一致）\n"
+        "- 子任务标题具体可执行；每天总量不超过 daily_hours 小时\n"
+    )
+    if refinement:
+        system += (
+            "\n用户要求修改已有日程列表。在保留方案大框架下按 refinement 调整 previous_tasks，"
+            "输出完整新 tasks 列表。\n"
+        )
+    user_msg: Dict[str, Any] = {
+        "goal": goal,
         "plan_title": plan_title,
-        "tasks": tasks,
-        "total": len(tasks),
-        "create_immediately": False,
+        "outline_text": outline_text,
+        "phases": phases,
+        "start_date": start_date,
+        "end_date": end_date,
+        "daily_hours": daily_hours,
+        "user_local_time": _plan_local_context(client_context),
+    }
+    if refinement:
+        user_msg["refinement"] = refinement.strip()
+    if previous_tasks:
+        user_msg["previous_tasks"] = previous_tasks
+    result = call_llm_json(system=system, user=str(user_msg))
+    if not result.ok or not result.data:
+        return {"ok": False, "error": "日程生成失败，请稍后重试。"}
+
+    tasks = result.data.get("tasks")
+    if not isinstance(tasks, list):
+        return {"ok": False, "error": "日程格式异常，tasks 缺失。"}
+
+    cleaned: List[Dict[str, Any]] = []
+    for t in tasks[:10]:
+        if not isinstance(t, dict):
+            continue
+        tt = str(t.get("type") or "").strip().lower()
+        if tt not in ("block", "ddl", "todo"):
+            continue
+        title = str(t.get("title") or "").strip()
+        if not title:
+            continue
+        item: Dict[str, Any] = {
+            "type": tt,
+            "title": title[:255],
+            "description": str(t.get("description") or ""),
+        }
+        if tt == "block":
+            if t.get("start_at") and t.get("end_at"):
+                item["start_at"] = t["start_at"]
+                item["end_at"] = t["end_at"]
+                cleaned.append(item)
+        elif tt == "ddl":
+            if t.get("due_at"):
+                item["due_at"] = t["due_at"]
+                cleaned.append(item)
+        elif tt == "todo":
+            if t.get("due_at"):
+                item["due_at"] = t["due_at"]
+            em = t.get("expected_minutes")
+            if em is not None:
+                try:
+                    item["expected_minutes"] = int(em)
+                except (TypeError, ValueError):
+                    pass
+            subs = t.get("subtasks")
+            if isinstance(subs, list):
+                item["subtasks"] = [
+                    {"title": str(s.get("title") or "")[:255]}
+                    for s in subs
+                    if isinstance(s, dict) and s.get("title")
+                ]
+            cleaned.append(item)
+
+    if not cleaned:
+        return {"ok": False, "error": "未能生成有效任务，请调整方案后重试。"}
+
+    has_todo_with_due = any(
+        x.get("type") == "todo" and x.get("due_at") for x in cleaned
+    )
+    if has_todo_with_due:
+        cleaned = [x for x in cleaned if x.get("type") != "ddl"]
+
+    if not cleaned:
+        return {"ok": False, "error": "未能生成有效任务，请调整方案后重试。"}
+
+    return {
+        "ok": True,
+        "plan_title": str(result.data.get("plan_title") or plan_title).strip() or plan_title,
+        "tasks": cleaned,
+        "total": len(cleaned),
     }
 
 

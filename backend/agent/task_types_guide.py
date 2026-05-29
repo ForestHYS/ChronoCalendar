@@ -18,7 +18,7 @@ TASK_TYPES_GUIDE = """
 - 用户说「会议/课程/约会/训练课」→ 优先 block
 - 用户说「截止/之前交/deadline」→ 优先 ddl
 - 用户说「计划/安排学习/多步完成/预计多久」→ 优先 todo
-- 不要默认一律用 block；不要长期多阶段规划用单条 block/ddl（应 generate_long_term_plan）
+- 不要默认一律用 block；长期多阶段规划应走 plan_gather_requirements 两阶段流程
 
 ## task_draft / build_task_draft 字段
 

@@ -38,11 +38,18 @@ def _assistant_content_for_history(msg: AgentMessage) -> str:
         return f"[查询结果：{n} 条任务。{hint}]"
     if t == "approval_required":
         return f"[需用户授权：{payload.get('summary') or ''}]"
+    if t == "plan_questions":
+        goal = (payload.get("plan_context") or {}).get("goal") or ""
+        n = len(payload.get("questions") or [])
+        return f"[长期规划：待用户回答 {n} 道选择题，目标：{goal}]"
+    if t == "plan_outline":
+        title = payload.get("plan_title") or "长期规划"
+        return f"[长期规划方案：{title}，待用户确认后排程]"
     if t == "plan_preview":
         title = payload.get("plan_title") or "长期规划"
         tasks = payload.get("tasks")
         n = len(tasks) if isinstance(tasks, list) else 0
-        return f"[长期规划预览：{title}，共 {n} 项，待用户确认创建]"
+        return f"[长期规划任务预览：{title}，共 {n} 项，待用户勾选创建]"
     if t == "message":
         return (payload.get("text") or "").strip() or "[助手回复]"
     return "[助手结构化回复]"
