@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from django.conf import settings
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -12,9 +13,15 @@ from .plan_interaction import (
     handle_plan_interaction,
     handle_plan_text_message,
 )
-from .models import AgentMessage, AgentSession, ApprovalRequest
-from .serializers import AgentMessageInSerializer, AgentMessageOutSerializer, AgentSessionSerializer
+from .models import AgentMessage, AgentSession, ApprovalRequest, UserLlmConfig
+from .serializers import (
+    AgentMessageInSerializer,
+    AgentMessageOutSerializer,
+    AgentSessionSerializer,
+    UserLlmConfigInSerializer,
+)
 from .registry import run_skill
+from .llm import test_llm_connection
 
 
 _graph = None
@@ -236,4 +243,92 @@ class ConfirmPlanView(APIView):
                 "errors": result["errors"],
             }
         })
+
+
+class UserLlmConfigView(APIView):
+    """获取/更新当前用户的 LLM 配置。"""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        cfg = UserLlmConfig.objects.filter(user=request.user).first()
+        if not cfg:
+            return ok({"base_url": "", "has_api_key": False, "model_name": ""})
+        return ok({
+            "base_url": cfg.base_url,
+            "has_api_key": bool(cfg.api_key),
+            "model_name": cfg.model_name,
+        })
+
+    def patch(self, request):
+        s = UserLlmConfigInSerializer(data=request.data)
+        if not s.is_valid():
+            return err("VALIDATION_ERROR", "输入数据无效", s.errors)
+
+        cfg, _ = UserLlmConfig.objects.get_or_create(user=request.user)
+        data = s.validated_data
+        update_fields = []
+
+        if "base_url" in data:
+            raw = (data.get("base_url") or "").strip()
+            cfg.base_url = raw.rstrip("/") if raw else ""
+            update_fields.append("base_url")
+        if "api_key" in data:
+            cfg.api_key = (data.get("api_key") or "").strip()
+            update_fields.append("api_key")
+        if "model_name" in data:
+            cfg.model_name = (data.get("model_name") or "").strip()
+            update_fields.append("model_name")
+
+        if update_fields:
+            cfg.save(update_fields=update_fields + ["updated_at"])
+
+        return ok({
+            "base_url": cfg.base_url,
+            "has_api_key": bool(cfg.api_key),
+            "model_name": cfg.model_name,
+        })
+
+
+class UserLlmConfigTestView(APIView):
+    """测试当前 LLM 配置是否可用。"""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        s = UserLlmConfigInSerializer(data=request.data)
+        if not s.is_valid():
+            return err("VALIDATION_ERROR", "输入数据无效", s.errors)
+
+        cfg = UserLlmConfig.objects.filter(user=request.user).first()
+        data = s.validated_data
+
+        base_url = data.get("base_url") if "base_url" in data else (cfg.base_url if cfg else "")
+        api_key = data.get("api_key") if "api_key" in data else (cfg.api_key if cfg else "")
+        model_name = data.get("model_name") if "model_name" in data else (cfg.model_name if cfg else "")
+
+        base_url = (base_url or "").strip().rstrip("/")
+        api_key = (api_key or "").strip()
+        model_name = (model_name or "").strip() or getattr(settings, "AGENT_LLM_MODEL", "gpt-4o-mini")
+
+        result = test_llm_connection(
+            api_key=api_key,
+            base_url=base_url or None,
+            model=model_name,
+        )
+        if result.ok:
+            return ok({
+                "ok": True,
+                "message": f"连接成功（模型：{model_name}）",
+            })
+
+        if result.error == "missing_api_key":
+            return err("MISSING_API_KEY", "API Key 不能为空")
+        if result.error == "invalid_api_key":
+            return err("INVALID_API_KEY", "API Key 无效或已过期")
+        if result.error == "timeout":
+            return err("TIMEOUT", "连接超时，请检查网络后重试")
+        if result.error == "connection_error":
+            return err("CONNECTION_FAILED", "无法连接服务器，请检查 Base URL")
+        return err("LLM_TEST_FAILED", "测试失败，请检查模型名称或接口配置")
 

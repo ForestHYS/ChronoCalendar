@@ -10,6 +10,7 @@ import '../../features/calendar/calendar_page.dart';
 import '../../features/home/home_page.dart';
 import '../../features/pomodoro/pomodoro_page.dart';
 import '../../features/settings/settings_page.dart';
+import '../../features/settings/ai_settings_page.dart';
 import '../../features/settings/pomodoro_settings_page.dart';
 import '../../features/settings/tag_manage_page.dart';
 import '../../features/shell/main_shell.dart';
@@ -120,6 +121,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/settings/pomodoro',
         parentNavigatorKey: _rootNavigatorKey,
         builder: (context, state) => const PomodoroSettingsPage(),
+      ),
+      GoRoute(
+        path: '/settings/ai',
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => const AiSettingsPage(),
       ),
       GoRoute(
         path: '/pomodoro',

@@ -115,7 +115,7 @@ def _classify_intent(state: AgentState) -> AgentState:
         history_summary=state.get("history_summary"),
         chat_history=history,
     )
-    r = call_llm_json(system=system, user="", messages=messages)
+    r = call_llm_json(system=system, user="", messages=messages, user_id=state.get("user_id"))
     intent = "chat"
     if r.ok and r.data:
         raw = (r.data.get("intent") or "").strip().lower()
@@ -270,7 +270,12 @@ def _decide_by_intent(state: AgentState) -> AgentState:
         history_summary=history_summary,
         chat_history=history,
     )
-    r = call_llm_json(system=system, user="", messages=messages)
+    r = call_llm_json(
+        system=system,
+        user="",
+        messages=messages,
+        user_id=state.get("user_id"),
+    )
     if not r.ok or not r.data:
         logger.warning("LLM unavailable for decide_by_intent(%s): %s", intent, r.error)
         state["response"] = _llm_fail_message()

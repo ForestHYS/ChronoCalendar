@@ -50,7 +50,6 @@ def _extract_json_object(content: str) -> Optional[dict]:
     except json.JSONDecodeError:
         pass
 
-    # 尝试提取第一个完整 {...} 块
     start = text.find("{")
     if start < 0:
         return None
@@ -99,24 +98,78 @@ def _invoke_chat(
     return content
 
 
+def _load_llm_config(user_id: Optional[str]) -> tuple[str, Optional[str], str]:
+    api_key = (getattr(settings, "AGENT_LLM_API_KEY", "") or "").strip()
+    base_url = (getattr(settings, "AGENT_LLM_BASE_URL", "") or "").strip() or None
+    model = _default_model()
+
+    if not user_id:
+        return api_key, base_url, model
+
+    try:
+        from .models import UserLlmConfig
+
+        cfg = UserLlmConfig.objects.filter(user_id=user_id).first()
+    except Exception:
+        return api_key, base_url, model
+
+    if cfg is None:
+        return api_key, base_url, model
+
+    resolved_model = (cfg.model_name or "").strip() or model
+    return (
+        (cfg.api_key or "").strip(),
+        (cfg.base_url or "").strip() or None,
+        resolved_model,
+    )
+
+
+def test_llm_connection(*, api_key: str, base_url: Optional[str], model: str) -> LlmResult:
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return LlmResult(ok=False, data=None, error="missing_api_key")
+
+    try:
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": "You are a health check."},
+                {"role": "user", "content": "ping"},
+            ],
+            temperature=0.0,
+        )
+        content = (resp.choices[0].message.content or "").strip()
+        return LlmResult(ok=True, data={"model": model, "text": content[:120]})
+    except AuthenticationError:
+        return LlmResult(ok=False, data=None, error="invalid_api_key")
+    except APITimeoutError:
+        return LlmResult(ok=False, data=None, error="timeout")
+    except APIConnectionError:
+        return LlmResult(ok=False, data=None, error="connection_error")
+    except OpenAIError as e:
+        return LlmResult(ok=False, data=None, error=f"openai_error:{type(e).__name__}")
+    except Exception as e:
+        return LlmResult(ok=False, data=None, error=f"llm_error:{type(e).__name__}")
+
+
 def call_llm_json(
     system: str,
     user: str,
     *,
     messages: Optional[List[dict]] = None,
+    user_id: Optional[str] = None,
 ) -> LlmResult:
     """
     调用 LLM 并要求返回 JSON。
-    - 若未配置 AGENT_LLM_API_KEY，则返回 ok=False（由上层走降级策略）。
+    - 若未配置 API Key，则返回 ok=False（由上层走降级策略）。
     - JSON 解析失败时会重试（AGENT_LLM_JSON_MAX_RETRIES），并尝试从文本中提取 JSON。
     """
-    api_key = (getattr(settings, "AGENT_LLM_API_KEY", "") or "").strip()
+    api_key, base_url, model = _load_llm_config(user_id)
     if not api_key:
         logger.warning("LLM disabled: missing AGENT_LLM_API_KEY")
         return LlmResult(ok=False, data=None, error="missing AGENT_LLM_API_KEY")
 
-    base_url = (getattr(settings, "AGENT_LLM_BASE_URL", "") or "").strip() or None
-    model = _default_model()
     chat_messages: List[dict] = list(messages) if messages else [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -196,17 +249,15 @@ def call_llm_json(
     return LlmResult(ok=False, data=None, error="LLM returned invalid JSON")
 
 
-def call_llm_text(system: str, user: str) -> LlmResult:
+def call_llm_text(system: str, user: str, *, user_id: Optional[str] = None) -> LlmResult:
     """
     调用 LLM 返回纯文本（仍用 LlmResult 容器，data=None，error 记录失败原因）。
     """
-    api_key = (getattr(settings, "AGENT_LLM_API_KEY", "") or "").strip()
+    api_key, base_url, model = _load_llm_config(user_id)
     if not api_key:
         logger.warning("LLM disabled: missing AGENT_LLM_API_KEY")
         return LlmResult(ok=False, data=None, error="missing AGENT_LLM_API_KEY")
 
-    base_url = (getattr(settings, "AGENT_LLM_BASE_URL", "") or "").strip() or None
-    model = _default_model()
     max_retries = _json_max_retries()
     try:
         client = OpenAI(api_key=api_key, base_url=base_url)

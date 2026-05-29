@@ -70,3 +70,21 @@ class ApprovalRequest(models.Model):
         db_table = "agent_approval_requests"
         ordering = ["-created_at"]
 
+
+class UserLlmConfig(models.Model):
+    """用户级 LLM 配置（用于 AI 助手）。"""
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="llm_config",
+    )
+    base_url = models.CharField(max_length=300, blank=True, default="")
+    api_key = models.CharField(max_length=200, blank=True, default="")
+    model_name = models.CharField(max_length=100, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "agent_llm_config"
+
