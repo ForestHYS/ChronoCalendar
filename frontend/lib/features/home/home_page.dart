@@ -17,6 +17,8 @@ import 'widgets/title_with_tags_row.dart';
 import 'widgets/recent_task_card.dart';
 import 'widgets/tag_focus_donut_chart.dart';
 
+const _otherFocusTagId = '__other__';
+
 /// 时长：从左到右「大字 + 小字单位」；分钟数字略大于小时数字。
 class _FocusDurationStack extends StatelessWidget {
   const _FocusDurationStack({required this.seconds, required this.tabular});
@@ -98,6 +100,21 @@ List<Tag> _tagsForTask(TaskRepository repo, Task t) {
   return t.tagIds.map(repo.tagById).whereType<Tag>().toList();
 }
 
+List<TagFocusSlice> _compactFocusSlices(List<TagFocusSlice> slices) {
+  final positive = slices.where((s) => s.seconds > 0).toList()
+    ..sort((a, b) => b.seconds.compareTo(a.seconds));
+  if (positive.length <= 4) return positive;
+
+  final visible = positive.take(3).toList();
+  final otherSeconds = positive
+      .skip(3)
+      .fold<int>(0, (total, slice) => total + slice.seconds);
+  if (otherSeconds > 0) {
+    visible.add(TagFocusSlice(_otherFocusTagId, otherSeconds));
+  }
+  return visible;
+}
+
 class HomePage extends ConsumerWidget {
   const HomePage({super.key});
 
@@ -108,6 +125,7 @@ class HomePage extends ConsumerWidget {
     final todos = repo.todosByRecentUsage();
     final tabular = const [FontFeature.tabularFigures()];
     final focusSlices = repo.lastWeekFocusSecondsByTag();
+    final compactFocusSlices = _compactFocusSlices(focusSlices);
     final lastWeekTotal = repo.lastWeekTotalFocusSeconds();
 
     return Scaffold(
@@ -345,7 +363,6 @@ class HomePage extends ConsumerWidget {
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     mainAxisAlignment: MainAxisAlignment.center,
-                                    mainAxisSize: MainAxisSize.min,
                                     children: [
                                       const Text(
                                         '近7日专注',
@@ -361,14 +378,14 @@ class HomePage extends ConsumerWidget {
                                         tabular: tabular,
                                       ),
                                       const SizedBox(height: 8),
-                                      for (final s in focusSlices.where((s) => s.seconds > 0))
+                                      for (final s in compactFocusSlices)
                                         _FocusLegendLine(repo: repo, slice: s),
                                     ],
                                   ),
                                 ),
                                 const SizedBox(width: 10),
                                 TagFocusDonutChart(
-                                  slices: focusSlices,
+                                  slices: compactFocusSlices,
                                   resolveTag: repo.tagById,
                                   dimension: 80,
                                   repaint: repo,
@@ -405,6 +422,9 @@ class _FocusLegendLine extends StatelessWidget {
     if (slice.tagId == '__untagged__') {
       dotColor = const Color(0xFF0D9488);
       labelText = '无标签';
+    } else if (slice.tagId == _otherFocusTagId) {
+      dotColor = AppColors.onSurfaceVariant;
+      labelText = '其他';
     } else if (tag == null) {
       return const SizedBox.shrink();
     } else {

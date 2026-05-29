@@ -46,18 +46,22 @@ class _DonutPainter extends CustomPainter {
     required this.slices,
     required this.resolveTag,
     required this.total,
-    Listenable? repaint,
-  }) : super(repaint: repaint);
+    super.repaint,
+  });
 
   final List<TagFocusSlice> slices;
   final Tag? Function(String id) resolveTag;
   final int total;
 
   static const _untaggedId = '__untagged__';
+  static const _otherId = '__other__';
 
   Color _colorForSlice(TagFocusSlice s) {
     if (s.tagId == _untaggedId) {
       return const Color(0xFF0D9488);
+    }
+    if (s.tagId == _otherId) {
+      return AppColors.onSurfaceVariant;
     }
     final tag = resolveTag(s.tagId);
     return tag?.color ?? AppColors.chartTagColors[0];
