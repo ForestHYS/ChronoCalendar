@@ -1,37 +1,40 @@
-"""
-config/settings.py
-
-开发环境配置。生产部署时请：
-  1. 将 SECRET_KEY 替换为真实随机值（可用 python -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"）
-  2. 将 DEBUG 设为 False
-  3. 配置 ALLOWED_HOSTS
-  4. 将 DATABASES 切换为 PostgreSQL
-"""
-
+import os
 from datetime import timedelta
 from pathlib import Path
 
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# ------------------------------------------------------------------ #
-# 安全
-# ------------------------------------------------------------------ #
-SECRET_KEY = "django-insecure-change-me-before-production"
-DEBUG = True
-ALLOWED_HOSTS = ["*"]
 
-# ------------------------------------------------------------------ #
-# 应用
-# ------------------------------------------------------------------ #
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name: str, default: list[str] | None = None) -> list[str]:
+    value = os.environ.get(name)
+    if not value:
+        return default or []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+SECRET_KEY = os.environ.get(
+    "DJANGO_SECRET_KEY",
+    "django-insecure-change-me-before-production",
+)
+DEBUG = env_bool("DJANGO_DEBUG", default=True)
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", ["*"] if DEBUG else [])
+CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS", [])
+
 INSTALLED_APPS = [
-    # Django 最小核心（本项目无管理后台）
     "django.contrib.auth",
     "django.contrib.contenttypes",
-    # 第三方
+    "django.contrib.staticfiles",
     "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
-    # 本项目
     "accounts",
     "tasks",
     "agent",
@@ -41,38 +44,35 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
 WSGI_APPLICATION = "config.wsgi.application"
 
-# ------------------------------------------------------------------ #
-# 数据库（开发默认 SQLite；生产切换为 PostgreSQL）
-# ------------------------------------------------------------------ #
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
+DB_ENGINE = os.environ.get("DB_ENGINE", "sqlite")
+if DB_ENGINE == "postgres":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("POSTGRES_DB", "chronocalendar"),
+            "USER": os.environ.get("POSTGRES_USER", "chronocalendar"),
+            "PASSWORD": os.environ.get("POSTGRES_PASSWORD", ""),
+            "HOST": os.environ.get("POSTGRES_HOST", "db"),
+            "PORT": os.environ.get("POSTGRES_PORT", "5432"),
+        }
     }
-    # PostgreSQL 示例：
-    # "default": {
-    #     "ENGINE": "django.db.backends.postgresql",
-    #     "NAME": "chronocalendar",
-    #     "USER": "postgres",
-    #     "PASSWORD": "yourpassword",
-    #     "HOST": "localhost",
-    #     "PORT": "5432",
-    # }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
-# ------------------------------------------------------------------ #
-# 用户模型
-# ------------------------------------------------------------------ #
 AUTH_USER_MODEL = "tasks.User"
 
-# ------------------------------------------------------------------ #
-# Django REST Framework
-# ------------------------------------------------------------------ #
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -83,13 +83,9 @@ REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
     ],
-    # 统一异常响应格式
     "EXCEPTION_HANDLER": "tasks.exceptions.custom_exception_handler",
 }
 
-# ------------------------------------------------------------------ #
-# SimpleJWT
-# ------------------------------------------------------------------ #
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(hours=2),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=30),
@@ -97,32 +93,35 @@ SIMPLE_JWT = {
     "UPDATE_LAST_LOGIN": False,
 }
 
-# ------------------------------------------------------------------ #
-# 时区与时间
-# ------------------------------------------------------------------ #
 USE_TZ = True
-TIME_ZONE = "UTC"
+TIME_ZONE = os.environ.get("DJANGO_TIME_ZONE", "UTC")
 LANGUAGE_CODE = "zh-hans"
-
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# ------------------------------------------------------------------ #
-# CORS（Flutter Web / 浏览器跨域；需安装 django-cors-headers）
-# ------------------------------------------------------------------ #
-CORS_ALLOW_ALL_ORIGINS = True  # 开发用；生产请改为 CORS_ALLOWED_ORIGINS 白名单
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# ------------------------------------------------------------------ #
-# Agent / LLM（由代码读取，不从环境变量读取）
-# ------------------------------------------------------------------ #
-# 注意：请勿将真实 key 提交到 git。推荐在本机用一个不入库的私有文件覆盖本变量，
-# 或者使用你的部署系统注入 settings（但 agent/llm.py 不会直接读取环境变量）。
-# 运行时优先使用用户在设置页保存的配置；此处留空表示默认禁用 LLM。
-AGENT_LLM_BASE_URL = ""
-AGENT_LLM_API_KEY = ""  # 为空表示禁用 LLM（会走规则降级）
-AGENT_LLM_MODEL = "gpt-5"
+CORS_ALLOW_ALL_ORIGINS = env_bool("CORS_ALLOW_ALL_ORIGINS", default=DEBUG)
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", [])
 
-# Agent 对话上下文：保留最近 N 条消息；总条数超过阈值时对更早部分做摘要
-AGENT_HISTORY_MAX_MESSAGES = 16
-AGENT_HISTORY_SUMMARIZE_THRESHOLD = 20
-# LLM 返回非 JSON 时的最大尝试次数（含首次）
-AGENT_LLM_JSON_MAX_RETRIES = 3
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_SSL_REDIRECT = env_bool("DJANGO_SECURE_SSL_REDIRECT", default=False)
+SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "0"))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool(
+    "DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False
+)
+SECURE_HSTS_PRELOAD = env_bool("DJANGO_SECURE_HSTS_PRELOAD", default=False)
+X_FRAME_OPTIONS = "DENY"
+
+AGENT_LLM_BASE_URL = os.environ.get("AGENT_LLM_BASE_URL", "")
+AGENT_LLM_API_KEY = os.environ.get("AGENT_LLM_API_KEY", "")
+AGENT_LLM_MODEL = os.environ.get("AGENT_LLM_MODEL", "gpt-5")
+
+AGENT_HISTORY_MAX_MESSAGES = int(os.environ.get("AGENT_HISTORY_MAX_MESSAGES", "16"))
+AGENT_HISTORY_SUMMARIZE_THRESHOLD = int(
+    os.environ.get("AGENT_HISTORY_SUMMARIZE_THRESHOLD", "20")
+)
+AGENT_LLM_JSON_MAX_RETRIES = int(os.environ.get("AGENT_LLM_JSON_MAX_RETRIES", "3"))
