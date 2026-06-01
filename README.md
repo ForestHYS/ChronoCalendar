@@ -53,28 +53,7 @@ ChronoCalendar 是一个前后端分离的移动端日程管理应用，前端�
 
 ## 技术栈
 
-```mermaid
-graph TB
-    subgraph FE["客户端 · Flutter / Dart（Android）"]
-        F1["界面与状态管理<br/>flutter_riverpod 2.x · Material 3"]
-        F2["路由<br/>go_router 14.x"]
-        F3["网络层<br/>http · ApiClient · JWT 自动刷新"]
-        F4["系统集成<br/>AlarmManager 本地提醒 · audioplayers · wakelock_plus"]
-    end
-
-    subgraph BE["服务端 · Python / Django"]
-        B1["认证服务<br/>DRF · SimpleJWT Bearer Token"]
-        B2["任务服务<br/>Task / Tag / SubTask / FocusSession"]
-        B3["AI Agent<br/>LangGraph 工作流 · OpenAI SDK"]
-    end
-
-    DB[("SQLite 开发 / PostgreSQL 生产")]
-    LLM(["OpenAI 兼容接口 · gpt-4o 等"])
-
-    FE -->|"HTTPS · REST · Bearer Token"| BE
-    BE --> DB
-    B3 -->|"OpenAI SDK"| LLM
-```
+![技术架构图](assets/tech-stack.png)
 
 ### 后端
 
