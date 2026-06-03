@@ -176,10 +176,16 @@ def _validate_conflict(args: dict) -> dict:
 
 
 def _validate_delete_task(args: dict) -> dict:
-    tid = args.get("task_id")
-    if not tid:
-        raise ValueError("task_id 必填")
-    return {"task_id": str(tid)}
+    tid = str(args.get("task_id") or "").strip()
+    q = str(args.get("q") or args.get("title") or "").strip()
+    if not tid and not q:
+        raise ValueError("missing_delete_target")
+    out: dict = {}
+    if tid:
+        out["task_id"] = tid
+    if q:
+        out["q"] = q
+    return out
 
 
 SKILLS: Dict[str, Skill] = {
@@ -223,10 +229,14 @@ SKILLS: Dict[str, Skill] = {
     ),
     "delete_task": Skill(
         name="delete_task",
-        description="删除指定任务（永久删除）。必须先由用户在前端批准，后端才会真正执行删除。",
+        description=(
+            "删除任务（永久删除，须用户批准）。"
+            "用 q 传标题关键词，仅按 title 匹配；"
+            "上文已唯一确定时可传 task_id。"
+        ),
         risk="high",
         requires_approval=True,
-        args_hint='{"task_id":"uuid"}',
+        args_hint='{"q":"标题关键词，优先","task_id":"可选，上文已唯一确定时"}',
         handler=_run_delete_task,
     ),
     "plan_gather_requirements": Skill(

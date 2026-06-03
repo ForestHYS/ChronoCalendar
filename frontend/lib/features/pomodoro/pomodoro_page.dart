@@ -416,19 +416,19 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
                           },
                         ),
                         ChoiceChip(
-                          label: const Text('白噪'),
-                          selected: _bgmAsset == 'audio/white_noise.mp3',
+                          label: const Text('自习室'),
+                          selected: _bgmAsset == 'audio/study_room.mp3',
                           onSelected: (v) {
                             if (!v) return;
-                            _pickBgm('audio/white_noise.mp3');
+                            _pickBgm('audio/study_room.mp3');
                           },
                         ),
                         ChoiceChip(
-                          label: const Text('咖啡'),
-                          selected: _bgmAsset == 'audio/cafe.mp3',
+                          label: const Text('壁炉'),
+                          selected: _bgmAsset == 'audio/fireplace.mp3',
                           onSelected: (v) {
                             if (!v) return;
-                            _pickBgm('audio/cafe.mp3');
+                            _pickBgm('audio/fireplace.mp3');
                           },
                         ),
                       ],

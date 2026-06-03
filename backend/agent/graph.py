@@ -12,7 +12,6 @@ from .plan_interaction import (
 )
 from .llm import (
     call_llm_json,
-    call_llm_text,
     is_llm_configured,
     is_missing_api_key_error,
     llm_not_configured_response,
@@ -21,6 +20,7 @@ from .registry import get_skill, normalize_args, skills_prompt_for
 from .models import AgentSession, ApprovalRequest
 from .task_types_guide import TASK_TYPES_GUIDE
 from .timezone_ctx import calendar_range_hints, timezone_prompt_lines, user_now_payload
+from .compose_llm import compose_user_text
 from . import tools
 import logging
 
@@ -114,7 +114,7 @@ def _classify_intent(state: AgentState) -> AgentState:
         "「加入日程」「添加到日历」等表述属于创建，不是查询\n"
         "- query_tasks：查询、搜索、列出已有任务，或问某天有什么安排\n"
         "- plan：长期规划、多天的学习计划/项目安排\n"
-        "- delete：删除任务\n"
+        "- delete：删除任务（按标题/描述即可，勿要求用户提供 id）\n"
         "若用户正在长期规划流程中但明确退出或转向其他意图，由规划续聊处理；此处仍按真实意图分类。\n"
     )
     user_payload = {
@@ -141,43 +141,25 @@ def _classify_intent(state: AgentState) -> AgentState:
     return state
 
 
-def _summarize_search_result_text(
-    items: List[Dict[str, Any]],
-    user_input: str,
-    *,
-    count: int,
-    user_id: Optional[str] = None,
-) -> str:
-    if not items:
-        return "未找到匹配的任务。"
-    lines = []
-    for it in items[:12]:
-        if not isinstance(it, dict):
-            continue
-        title = it.get("title") or "未命名"
-        typ = it.get("type") or ""
-        time_part = (it.get("time_summary") or "").strip()
-        if not time_part:
-            if it.get("start_at") and it.get("end_at"):
-                time_part = f"{it.get('start_at')} — {it.get('end_at')}"
-            elif it.get("due_at"):
-                time_part = f"截止 {it.get('due_at')}"
-        suffix = f" · {time_part}" if time_part else ""
-        lines.append(f"- {title}（{typ}）{suffix}")
-    blob = "\n".join(lines)
-    system = (
-        "你是日程助手。根据用户问题和任务列表，用 1～3 句中文简要说明；"
-        "每条已含时间信息，勿声称列表缺少日期。不要编造列表外的任务。"
+def _compose_ctx(state: AgentState) -> Dict[str, Any]:
+    return {
+        "user_input": state.get("input_text") or "",
+        "intent": state.get("intent"),
+        "user_id": state.get("user_id"),
+        "history_summary": state.get("history_summary"),
+    }
+
+
+def _say(state: AgentState, scene: str, facts: Dict[str, Any]) -> str:
+    c = _compose_ctx(state)
+    return compose_user_text(
+        user_input=c["user_input"],
+        intent=c.get("intent"),
+        scene=scene,
+        facts=facts,
+        user_id=c.get("user_id"),
+        history_summary=c.get("history_summary"),
     )
-    user = f"用户问题：{user_input}\n\n共 {count} 条：\n{blob}"
-    r = call_llm_text(system=system, user=user, user_id=user_id)
-    if r.ok and r.data and (r.data.get("text") or "").strip():
-        return str(r.data["text"]).strip()
-    titles = "、".join(
-        (it.get("title") or "") for it in items[:3] if isinstance(it, dict)
-    )
-    suffix = f"等 {count} 个" if count > 3 else ""
-    return f"找到 {count} 个相关任务：{titles}{suffix}。点击下方「查看详情」可打开任务页。"
 
 
 def _decision_output_formats() -> str:
@@ -248,10 +230,12 @@ def _prompt_plan(ctx: dict) -> str:
     )
 
 
-def _prompt_delete() -> str:
+def _prompt_delete(ctx: dict) -> str:
     return (
-        "你是任务删除助手。删除须调用 delete_task（会进入审批，不会立刻删除）。\n"
-        "可用工具：\n"
+        "用户要删除任务。调用 delete_task；用 args.q 传标题关键词（仅按标题匹配）。\n"
+        "勿索要 task_id。删除需用户审批。\n"
+        + _time_context_block(ctx)
+        + "\n"
         + skills_prompt_for(["delete_task"])
         + "\n"
         + _decision_output_formats()
@@ -276,7 +260,7 @@ def _decide_by_intent(state: AgentState) -> AgentState:
         "create_task": lambda: _prompt_create_task(ctx),
         "query_tasks": lambda: _prompt_query_tasks(ctx),
         "plan": lambda: _prompt_plan(ctx),
-        "delete": lambda: _prompt_delete(),
+        "delete": lambda: _prompt_delete(ctx),
     }
     system = builders.get(intent, builders["chat"])()
 
@@ -311,7 +295,12 @@ def _run_tool(state: AgentState) -> AgentState:
 
     decision = resp.get("decision")
     if not isinstance(decision, dict):
-        state["response"] = {"type": "message", "text": "AI 返回格式异常。"}
+        state["last_tool"] = {
+            "tool": "_decision",
+            "args": {},
+            "output": {"ok": False, "error": "invalid_decision"},
+        }
+        state["response"] = {}
         return state
 
     action = decision.get("action")
@@ -323,15 +312,22 @@ def _run_tool(state: AgentState) -> AgentState:
         draft = decision.get("task_draft") if isinstance(decision.get("task_draft"), dict) else {}
         tt = (draft.get("type") or "").strip().lower()
         if tt not in ("block", "ddl", "todo"):
-            state["response"] = {
-                "type": "message",
-                "text": "草稿缺少有效任务类型（block/ddl/todo），请说明要创建哪类任务。",
+            state["last_tool"] = {
+                "tool": "open_editor",
+                "args": {},
+                "output": {"ok": False, "error": "invalid_task_draft_type", "draft": draft},
             }
+            state["response"] = {}
             return state
         state["response"] = {"type": "open_editor", "task_draft": draft}
         return state
     if action != "tool":
-        state["response"] = {"type": "message", "text": "无法处理的指令。"}
+        state["last_tool"] = {
+            "tool": "_decision",
+            "args": {},
+            "output": {"ok": False, "error": "unsupported_action", "action": action},
+        }
+        state["response"] = {}
         return state
 
     tool_name = decision.get("tool")
@@ -341,7 +337,12 @@ def _run_tool(state: AgentState) -> AgentState:
 
     skill = get_skill(str(tool_name)) if tool_name else None
     if not skill:
-        state["response"] = {"type": "message", "text": f"未知工具：{tool_name}"}
+        state["last_tool"] = {
+            "tool": str(tool_name),
+            "args": raw_args,
+            "output": {"ok": False, "error": "unknown_tool", "tool": tool_name},
+        }
+        state["response"] = {}
         return state
 
     user_id = state.get("user_id") or ""
@@ -351,46 +352,46 @@ def _run_tool(state: AgentState) -> AgentState:
         try:
             args = normalize_args(skill.name, raw_args)
         except ValueError as e:
-            state["response"] = {"type": "message", "text": str(e)}
+            state["last_tool"] = {
+                "tool": skill.name,
+                "args": raw_args,
+                "output": {"ok": False, "error": "validation", "code": str(e)},
+            }
+            state["response"] = {}
             return state
 
         if skill.name == "delete_task":
-            tid = args.get("task_id")
-            summ = tools.task_summary_for_approval(user_id=user_id, task_id=tid)
-            if not summ.get("ok"):
-                state["response"] = {"type": "message", "text": "找不到该任务或无权删除。"}
-                return state
-            task = summ["task"]
-            summary = f"永久删除任务「{task.get('title', '')}」（{task.get('type', '')}）"
-            sid = state.get("session_id")
-            session = None
-            if sid:
-                session = AgentSession.objects.filter(pk=sid, user_id=user_id).first()
-
-            ar = ApprovalRequest.objects.create(
+            resolved = tools.resolve_delete_task_target(
                 user_id=user_id,
-                agent_session=session,
-                skill_name=skill.name,
-                args_json=args,
-                summary=summary[:500],
+                task_id=args.get("task_id"),
+                q=args.get("q"),
+                client_context=client_context,
             )
-            state["response"] = {
-                "type": "approval_required",
-                "approval_id": str(ar.id),
-                "skill_name": skill.name,
-                "summary": summary,
-                "task_preview": task,
-                "proposed_action": {"skill_name": skill.name, "args": args},
+            state["last_tool"] = {
+                "tool": "delete_task",
+                "args": args,
+                "output": resolved,
             }
+            state["response"] = {}
             return state
 
-        state["response"] = {"type": "message", "text": "该操作需要审批，但未配置审批流程。"}
+        state["last_tool"] = {
+            "tool": skill.name,
+            "args": raw_args,
+            "output": {"ok": False, "error": "approval_not_configured"},
+        }
+        state["response"] = {}
         return state
 
     try:
         args = normalize_args(skill.name, raw_args)
     except ValueError as e:
-        state["response"] = {"type": "message", "text": str(e)}
+        state["last_tool"] = {
+            "tool": skill.name,
+            "args": raw_args,
+            "output": {"ok": False, "error": "validation", "code": str(e)},
+        }
+        state["response"] = {}
         return state
 
     from .registry import run_skill
@@ -401,7 +402,12 @@ def _run_tool(state: AgentState) -> AgentState:
         out = run_skill(skill.name, user_id, tool_raw)
     except Exception as e:
         logger.exception("run_skill failed")
-        state["response"] = {"type": "message", "text": f"工具执行失败：{e}"}
+        state["last_tool"] = {
+            "tool": skill.name,
+            "args": raw_args,
+            "output": {"ok": False, "error": "tool_exception", "detail": type(e).__name__},
+        }
+        state["response"] = {}
         return state
 
     state["last_tool"] = {"tool": skill.name, "args": args, "output": out}
@@ -413,17 +419,22 @@ def _compose_build_task_draft(state: AgentState, draft: dict) -> None:
     if draft.get("ok") is False:
         state["response"] = {
             "type": "message",
-            "text": draft.get("error") or "草稿生成失败。",
+            "text": _say(
+                state,
+                "task_draft_failed",
+                {"error": draft.get("error"), "draft": draft},
+            ),
         }
         return
-    title = draft.get("title") or "新任务"
-    tt = draft.get("type") or ""
-    type_label = {"block": "固定时段", "ddl": "截止日期", "todo": "待办"}.get(tt, tt)
     clean_draft = {k: v for k, v in draft.items() if k not in ("ok", "error")}
     state["response"] = {
         "type": "open_editor",
         "task_draft": clean_draft,
-        "message": f"已生成{type_label}任务「{title}」草稿，请确认后保存。",
+        "message": _say(
+            state,
+            "task_draft_ready",
+            {"task_draft": clean_draft},
+        ),
     }
 
 
@@ -447,13 +458,109 @@ def _compose_check_block_conflict(state: AgentState, out: dict, args: dict) -> N
     resp: Dict[str, Any] = {
         "type": "open_editor",
         "task_draft": draft,
+        "message": _say(
+            state,
+            "block_conflict_checked",
+            {"conflict": conflict, "task_draft": draft},
+        ),
     }
     if conflict:
         resp["conflict"] = conflict
-        resp["message"] = "检测到时间冲突，可选择建议时间或自行修改后保存。"
-    else:
-        resp["message"] = "该时段无冲突，请确认任务草稿后保存。"
     state["response"] = resp
+
+
+def _compose_delete_task(state: AgentState, out: dict, args: dict) -> None:
+    user_id = state.get("user_id") or ""
+    if out.get("ok"):
+        tid = out.get("task_id")
+        task = out.get("task") if isinstance(out.get("task"), dict) else {}
+        approve_args = {"task_id": tid}
+        summary = _say(
+            state,
+            "delete_approval",
+            {"task": task, "proposed_action": approve_args},
+        )
+        sid = state.get("session_id")
+        session = None
+        if sid:
+            session = AgentSession.objects.filter(pk=sid, user_id=user_id).first()
+        ar = ApprovalRequest.objects.create(
+            user_id=user_id,
+            agent_session=session,
+            skill_name="delete_task",
+            args_json=approve_args,
+            summary=(summary or "")[:500],
+        )
+        state["response"] = {
+            "type": "approval_required",
+            "approval_id": str(ar.id),
+            "skill_name": "delete_task",
+            "summary": summary,
+            "task_preview": task,
+            "proposed_action": {"skill_name": "delete_task", "args": approve_args},
+        }
+        return
+
+    err = out.get("error")
+    if err == "ambiguous":
+        items = out.get("items") if isinstance(out.get("items"), list) else []
+        state["response"] = {
+            "type": "query_result",
+            "items": items,
+            "text": _say(
+                state,
+                "delete_ambiguous",
+                {
+                    "q": out.get("q"),
+                    "count": out.get("count", len(items)),
+                    "items": items,
+                    "match_by": "title",
+                },
+            ),
+        }
+        return
+
+    state["response"] = {
+        "type": "message",
+        "text": _say(
+            state,
+            "delete_resolve_failed",
+            {"error": err, "q": out.get("q") or args.get("q"), "args": args},
+        ),
+    }
+
+
+def _compose_tool_failure(state: AgentState, tool_name: str, out: dict) -> None:
+    err = out.get("error")
+    if err == "validation":
+        scene = "tool_validation"
+        facts = {"tool": tool_name, "code": out.get("code")}
+    elif err == "unknown_tool":
+        scene = "unknown_tool"
+        facts = {"tool": out.get("tool")}
+    elif err == "invalid_decision":
+        scene = "invalid_decision"
+        facts = {}
+    elif err == "invalid_task_draft_type":
+        scene = "invalid_task_draft"
+        facts = {"draft": out.get("draft")}
+    elif err == "unsupported_action":
+        scene = "unsupported_action"
+        facts = {"action": out.get("action")}
+    elif err == "tool_exception":
+        scene = "tool_exception"
+        facts = {"tool": tool_name, "detail": out.get("detail")}
+    elif err == "approval_not_configured":
+        scene = "approval_not_configured"
+        facts = {"tool": tool_name}
+    else:
+        scene = "tool_error"
+        facts = {"tool": tool_name, "output": out}
+
+    state["response"] = {
+        "type": "message",
+        "text": _say(state, scene, facts),
+    }
 
 
 def _compose_response(state: AgentState) -> AgentState:
@@ -464,9 +571,25 @@ def _compose_response(state: AgentState) -> AgentState:
     last_tool = state.get("last_tool")
 
     if isinstance(last_tool, dict):
-        tool_name = last_tool.get("tool")
+        tool_name = str(last_tool.get("tool") or "")
         out = last_tool.get("output") or {}
         args = last_tool.get("args") or {}
+
+        if out.get("ok") is False and out.get("error") in (
+            "validation",
+            "unknown_tool",
+            "invalid_decision",
+            "invalid_task_draft_type",
+            "unsupported_action",
+            "tool_exception",
+            "approval_not_configured",
+        ):
+            _compose_tool_failure(state, tool_name, out)
+            return state
+
+        if tool_name == "delete_task":
+            _compose_delete_task(state, out, args)
+            return state
 
         if tool_name == "build_task_draft":
             _compose_build_task_draft(state, out)
@@ -476,7 +599,11 @@ def _compose_response(state: AgentState) -> AgentState:
             if out.get("ok") is False:
                 state["response"] = {
                     "type": "message",
-                    "text": "时间范围无效，请重新说明开始和结束时间。",
+                    "text": _say(
+                        state,
+                        "block_conflict_invalid_range",
+                        {"error": out.get("error"), "args": args},
+                    ),
                 }
             else:
                 _compose_check_block_conflict(state, out, args)
@@ -486,34 +613,44 @@ def _compose_response(state: AgentState) -> AgentState:
             if out.get("ok") is False:
                 state["response"] = {
                     "type": "message",
-                    "text": f"无法完成查询：{out.get('error') or '查询失败'}。",
+                    "text": _say(
+                        state,
+                        "search_failed",
+                        {"error": out.get("error"), "args": args},
+                    ),
                 }
                 return state
             items = out.get("items") if isinstance(out.get("items"), list) else []
-            count = out.get("count", len(items))
+            count = int(out.get("count", len(items)) or 0)
             range_applied = bool(out.get("range_applied"))
             if not items:
-                empty_text = (
-                    "该时间段内没有安排任务。"
-                    if range_applied
-                    else "未找到匹配的任务。"
-                )
                 state["response"] = {
                     "type": "query_result",
                     "items": [],
-                    "text": empty_text,
+                    "text": _say(
+                        state,
+                        "search_empty",
+                        {
+                            "range_applied": range_applied,
+                            "range_from": out.get("range_from"),
+                            "range_to": out.get("range_to"),
+                            "args": args,
+                        },
+                    ),
                 }
             else:
-                summary = _summarize_search_result_text(
-                    items,
-                    text,
-                    count=int(count) if count else len(items),
-                    user_id=state.get("user_id"),
-                )
                 state["response"] = {
                     "type": "query_result",
                     "items": items,
-                    "text": summary,
+                    "text": _say(
+                        state,
+                        "search_results",
+                        {
+                            "count": count,
+                            "items": items,
+                            "range_applied": range_applied,
+                        },
+                    ),
                 }
             return state
 
@@ -521,7 +658,11 @@ def _compose_response(state: AgentState) -> AgentState:
             if not out.get("ok"):
                 state["response"] = {
                     "type": "message",
-                    "text": out.get("error") or "无法生成规划问题。",
+                    "text": _say(
+                        state,
+                        "plan_tool_failed",
+                        {"tool": tool_name, "error": out.get("error")},
+                    ),
                 }
                 return state
             state["response"] = compose_plan_questions(out)
@@ -531,7 +672,11 @@ def _compose_response(state: AgentState) -> AgentState:
             if not out.get("ok"):
                 state["response"] = {
                     "type": "message",
-                    "text": out.get("error") or "方案生成失败。",
+                    "text": _say(
+                        state,
+                        "plan_tool_failed",
+                        {"tool": tool_name, "error": out.get("error")},
+                    ),
                 }
                 return state
             state["response"] = compose_plan_outline(out)
@@ -541,14 +686,25 @@ def _compose_response(state: AgentState) -> AgentState:
             if not out.get("ok"):
                 state["response"] = {
                     "type": "message",
-                    "text": out.get("error") or "日程生成失败。",
+                    "text": _say(
+                        state,
+                        "plan_tool_failed",
+                        {"tool": tool_name, "error": out.get("error")},
+                    ),
                 }
                 return state
             state["response"] = compose_schedule_preview(out)
             return state
 
+        if out.get("ok") is False:
+            _compose_tool_failure(state, tool_name, out)
+            return state
+
     logger.warning("compose_response fallback: last_tool=%s", last_tool)
-    state["response"] = {"type": "message", "text": "处理完成，但未生成可展示的结果。"}
+    state["response"] = {
+        "type": "message",
+        "text": _say(state, "compose_fallback", {"last_tool": last_tool}),
+    }
     return state
 
 
