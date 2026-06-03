@@ -263,6 +263,67 @@ def execute_delete_task(*, user_id: str, task_id: str) -> dict:
     return {"ok": True, "deleted_id": str(task_id), "title": title}
 
 
+def resolve_delete_task_target(
+    *,
+    user_id: str,
+    task_id: Optional[str] = None,
+    q: Optional[str] = None,
+    client_context: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """
+    根据 task_id 或标题关键词 q（仅 title 模糊匹配）定位待删除任务。
+    返回结构化结果，不含面向用户的文案（由 Compose 阶段 LLM 生成）。
+    """
+    tid = (task_id or "").strip()
+    keyword = (q or "").strip()
+
+    if tid:
+        summ = task_summary_for_approval(user_id=user_id, task_id=tid)
+        if summ.get("ok"):
+            return {
+                "ok": True,
+                "task_id": tid,
+                "task": summ["task"],
+                "resolved_by": "task_id",
+            }
+
+    if not keyword:
+        if tid:
+            return {"ok": False, "error": "not_found", "task_id": tid}
+        return {"ok": False, "error": "missing_target"}
+
+    sr = search_tasks(
+        user_id=user_id,
+        q=keyword,
+        limit=10,
+        client_context=client_context,
+    )
+    items = sr.get("items") if isinstance(sr.get("items"), list) else []
+    if not items:
+        return {"ok": False, "error": "not_found", "q": keyword, "match_by": "title"}
+    if len(items) == 1:
+        only_id = str(items[0].get("id") or "")
+        summ = task_summary_for_approval(user_id=user_id, task_id=only_id)
+        if summ.get("ok"):
+            return {
+                "ok": True,
+                "task_id": only_id,
+                "task": summ["task"],
+                "resolved_by": "q",
+                "q": keyword,
+            }
+        return {"ok": False, "error": "resolve_failed", "q": keyword}
+
+    return {
+        "ok": False,
+        "error": "ambiguous",
+        "items": items,
+        "q": keyword,
+        "count": len(items),
+        "match_by": "title",
+    }
+
+
 def task_summary_for_approval(*, user_id: str, task_id: str) -> dict:
     """用于审批摘要，不执行删除。"""
     t = Task.objects.filter(user_id=user_id, pk=task_id).select_related("block_detail", "ddl_detail", "todo_detail").first()
