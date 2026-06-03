@@ -54,33 +54,41 @@ class _FocusDurationStack extends StatelessWidget {
     );
 
     if (h > 0) {
-      return Row(
+      return FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.centerLeft,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('$h', style: hourNumStyle),
+            const SizedBox(width: 2),
+            const Text('小时', style: unitStyle),
+            if (m > 0) ...[
+              const SizedBox(width: 6),
+              Text('$m', style: minuteNumStyle),
+              const SizedBox(width: 2),
+              const Text('分钟', style: unitStyle),
+            ],
+          ],
+        ),
+      );
+    }
+
+    return FittedBox(
+      fit: BoxFit.scaleDown,
+      alignment: Alignment.centerLeft,
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.baseline,
         textBaseline: TextBaseline.alphabetic,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text('$h', style: hourNumStyle),
+          Text('$m', style: minuteNumStyle),
           const SizedBox(width: 2),
-          const Text('小时', style: unitStyle),
-          if (m > 0) ...[
-            const SizedBox(width: 6),
-            Text('$m', style: minuteNumStyle),
-            const SizedBox(width: 2),
-            const Text('分钟', style: unitStyle),
-          ],
+          const Text('分钟', style: unitStyle),
         ],
-      );
-    }
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text('$m', style: minuteNumStyle),
-        const SizedBox(width: 2),
-        const Text('分钟', style: unitStyle),
-      ],
+      ),
     );
   }
 }
@@ -430,7 +438,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 8),
                           // 内容行：时长 & 图例（左）+ 甜甜圈图（右）
                           Expanded(
                             child: Row(
@@ -454,7 +462,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                                         seconds: lastWeekTotal,
                                         tabular: tabular,
                                       ),
-                                      const SizedBox(height: 8),
+                                      const SizedBox(height: 4),
                                       for (final s in compactFocusSlices)
                                         _FocusLegendLine(repo: repo, slice: s),
                                     ],
@@ -510,7 +518,7 @@ class _FocusLegendLine extends StatelessWidget {
       labelText = tag.name;
     }
     return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.only(bottom: 4),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [

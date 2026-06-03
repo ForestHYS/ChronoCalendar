@@ -6,7 +6,11 @@ Base URL：/api/v1/
 
 from django.urls import include, path
 
+from .health import healthz
+
 urlpatterns = [
+    path("healthz/", healthz),
+
     # Auth
     path("api/v1/auth/", include("accounts.urls")),
 
