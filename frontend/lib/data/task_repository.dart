@@ -39,9 +39,11 @@ class TaskRepository extends ChangeNotifier {
     _bootstrapping = true;
     notifyListeners();
     try {
-      await refreshTags();
-      await refreshTasks();
-      await refreshFocusStats();
+      await Future.wait([
+        refreshTags(),
+        refreshTasks(),
+        refreshFocusStats(),
+      ]);
     } finally {
       _bootstrapping = false;
       notifyListeners();
@@ -368,10 +370,31 @@ class TaskRepository extends ChangeNotifier {
   }
 
   Future<void> completeTask(String id) async {
-    final data = await _api.request('POST', 'tasks/$id/complete/', auth: true);
-    if (data is Map<String, dynamic>) {
-      _replaceTask(taskFromJson(data));
+    final i = _tasks.indexWhere((t) => t.id == id);
+    Task? previous;
+    if (i >= 0) {
+      previous = _tasks[i];
+      final now = DateTime.now();
+      _tasks[i] = previous.copyWith(
+        status: TaskStatus.completed,
+        completedAt: now,
+        completedAtWeekYear: weekKeyFor(now),
+        lastActivityAt: now,
+      );
       hapticTaskCompleted();
+      notifyListeners();
+    }
+    try {
+      final data = await _api.request('POST', 'tasks/$id/complete/', auth: true);
+      if (data is Map<String, dynamic>) {
+        _replaceTask(taskFromJson(data));
+      }
+    } catch (e) {
+      if (previous != null && i >= 0) {
+        _tasks[i] = previous;
+        notifyListeners();
+      }
+      rethrow;
     }
   }
 

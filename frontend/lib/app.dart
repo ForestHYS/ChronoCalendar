@@ -10,7 +10,7 @@ import 'core/notifications/notification_service.dart';
 import 'core/router/app_router.dart';
 import 'core/theme/app_theme.dart';
 import 'data/providers.dart';
-import 'shared/widgets/app_loading_view.dart';
+import 'shared/widgets/app_startup_logo_view.dart';
 
 class CalendarApp extends ConsumerStatefulWidget {
   const CalendarApp({super.key});
@@ -143,10 +143,7 @@ class _CalendarAppState extends ConsumerState<CalendarApp> with WidgetsBindingOb
           children: [
             themed,
             const Positioned.fill(
-              child: Material(
-                color: Color(0xCCFAFAFA),
-                child: AppLoadingView(message: '正在同步数据…'),
-              ),
+              child: AppStartupLogoView(),
             ),
           ],
         );

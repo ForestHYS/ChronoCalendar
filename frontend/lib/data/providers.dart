@@ -9,6 +9,7 @@ import 'app_settings_repository.dart';
 import 'ai_settings_repository.dart';
 import 'auth_repository.dart';
 import 'agent_repository.dart';
+import 'agent_session_store.dart';
 import 'pomodoro_settings_repository.dart';
 import 'task_repository.dart';
 
@@ -40,6 +41,10 @@ final agentRepositoryProvider = Provider<AgentRepository>((ref) {
   return AgentRepository(ref.watch(apiClientProvider));
 });
 
+final agentSessionStoreProvider = Provider<AgentSessionStore>((ref) {
+  return AgentSessionStore(ref.watch(sharedPreferencesProvider));
+});
+
 final aiSettingsRepositoryProvider = Provider<AiSettingsRepository>((ref) {
   return AiSettingsRepository(ref.watch(apiClientProvider));
 });
@@ -69,13 +74,14 @@ final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
 });
 
 class AuthNotifier extends ChangeNotifier {
-  AuthNotifier(this._repo, this._taskRepo, this._appSettings) {
+  AuthNotifier(this._repo, this._taskRepo, this._appSettings, this._agentStore) {
     _sync();
   }
 
   final AuthRepository _repo;
   final TaskRepository _taskRepo;
   final AppSettingsRepository _appSettings;
+  final AgentSessionStore _agentStore;
 
   void _sync() {
     _loggedIn = _repo.isLoggedIn;
@@ -131,7 +137,9 @@ class AuthNotifier extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    final email = _repo.savedEmail;
     _taskRepo.clearLocalCache();
+    await _agentStore.clearForUser(email);
     await _repo.logout();
     _sync();
     notifyListeners();
@@ -160,5 +168,6 @@ final authNotifierProvider = ChangeNotifierProvider<AuthNotifier>((ref) {
     ref.watch(authRepositoryProvider),
     ref.read(taskRepositoryProvider),
     ref.read(appSettingsRepositoryProvider),
+    ref.read(agentSessionStoreProvider),
   );
 });

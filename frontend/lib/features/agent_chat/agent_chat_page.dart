@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,7 +7,45 @@ import 'package:go_router/go_router.dart';
 import '../../core/agent_client_context.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/ui/app_error_dialog.dart';
+import '../../data/agent_session_store.dart';
 import '../../data/providers.dart';
+
+bool _agentPayloadAlreadyActed(Map<String, dynamic> json) {
+  return json['type'] == 'open_editor' ||
+      json['type'] == 'approval_required' ||
+      (json['type'] == 'plan_preview' && json['plan_confirmed'] == true) ||
+      (json['type'] == 'plan_questions' && json['plan_answered'] == true) ||
+      (json['type'] == 'plan_outline' && json['outline_confirmed'] == true);
+}
+
+List<_ChatItem> _chatItemsFromRawMessages(List<Map<String, dynamic>> msgs) {
+  final restored = <_ChatItem>[];
+  for (final m in msgs) {
+    final role = m['role'] as String?;
+    if (role == 'user') {
+      restored.add(_ChatItem.user(m['content_text'] as String? ?? ''));
+    } else if (role == 'assistant') {
+      final json = m['content_json'];
+      if (json is Map<String, dynamic>) {
+        restored.add(
+          _ChatItem.assistant(
+            json,
+            messageId: m['id'] as String?,
+            initialSubmitted: _agentPayloadAlreadyActed(json),
+          ),
+        );
+      } else {
+        restored.add(
+          _ChatItem.assistant({
+            'type': 'message',
+            'text': m['content_text'] ?? '',
+          }),
+        );
+      }
+    }
+  }
+  return restored;
+}
 
 class AgentChatPage extends ConsumerStatefulWidget {
   const AgentChatPage({super.key});
@@ -23,6 +63,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   bool _loading = true;
 
   final List<_ChatItem> _items = [];
+  List<Map<String, dynamic>> _rawMessages = [];
 
   @override
   void initState() {
@@ -30,58 +71,73 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     _restoreSession();
   }
 
-  /// 启动时尝试恢复最近一次会话及其历史消息。
+  String? get _userEmail => ref.read(authRepositoryProvider).savedEmail;
+
+  AgentSessionStore get _sessionStore => ref.read(agentSessionStoreProvider);
+
+  void _applyRawMessages(List<Map<String, dynamic>> msgs) {
+    _rawMessages = msgs.map((m) => Map<String, dynamic>.from(m)).toList();
+    _items
+      ..clear()
+      ..addAll(_chatItemsFromRawMessages(_rawMessages));
+  }
+
+  Future<void> _persistCache() async {
+    final sid = _sessionId;
+    if (sid == null || sid.isEmpty) return;
+    await _sessionStore.saveSnapshot(
+      email: _userEmail,
+      sessionId: sid,
+      messages: _rawMessages,
+    );
+  }
+
+  void _appendToCache(String userText, Map<String, dynamic> resp, String? assistantId) {
+    _rawMessages.add({'role': 'user', 'content_text': userText});
+    _rawMessages.add({
+      'role': 'assistant',
+      'content_json': resp,
+      if (assistantId != null && assistantId.isNotEmpty) 'id': assistantId,
+    });
+    unawaited(_persistCache());
+  }
+
+  /// 先读本地快照与 lastSessionId，再后台拉服务端对齐。
   Future<void> _restoreSession() async {
+    final repo = ref.read(agentRepositoryProvider);
+    final email = _userEmail;
+
+    final snapshot = await _sessionStore.loadSnapshot(email);
+    if (snapshot != null) {
+      _sessionId = snapshot.sessionId;
+      if (mounted) {
+        setState(() {
+          _applyRawMessages(snapshot.messages);
+          _loading = false;
+        });
+        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+      }
+    }
+
     try {
-      final repo = ref.read(agentRepositoryProvider);
-      final sessions = await repo.getSessions();
-      if (sessions.isNotEmpty) {
-        _sessionId = sessions.first['id'] as String?;
-        if (_sessionId != null) {
-          final msgs = await repo.getMessages(_sessionId!);
-          final restored = <_ChatItem>[];
-          for (final m in msgs) {
-            final role = m['role'] as String?;
-            if (role == 'user') {
-              restored.add(_ChatItem.user(m['content_text'] as String? ?? ''));
-            } else if (role == 'assistant') {
-              final json = m['content_json'];
-              if (json is Map<String, dynamic>) {
-                // 历史中的 open_editor 草稿和 approval_required 审批均已操作过，标记为已提交
-                final alreadyActed =
-                    json['type'] == 'open_editor' ||
-                    json['type'] == 'approval_required' ||
-                    (json['type'] == 'plan_preview' &&
-                        json['plan_confirmed'] == true) ||
-                    (json['type'] == 'plan_questions' &&
-                        json['plan_answered'] == true) ||
-                    (json['type'] == 'plan_outline' &&
-                        json['outline_confirmed'] == true);
-                restored.add(
-                  _ChatItem.assistant(
-                    json,
-                    messageId: m['id'] as String?,
-                    initialSubmitted: alreadyActed,
-                  ),
-                );
-              } else {
-                restored.add(
-                  _ChatItem.assistant({
-                    'type': 'message',
-                    'text': m['content_text'] ?? '',
-                  }),
-                );
-              }
-            }
-          }
-          if (mounted) {
-            setState(() => _items.addAll(restored));
-            WidgetsBinding.instance.addPostFrameCallback(
-              (_) => _scrollToBottom(),
-            );
-          }
+      var sid = await _sessionStore.getLastSessionId(email) ?? _sessionId;
+      if (sid == null) {
+        final sessions = await repo.getSessions();
+        if (sessions.isNotEmpty) {
+          sid = sessions.first['id'] as String?;
         }
       }
+      if (sid == null) return;
+
+      await _sessionStore.setLastSessionId(email, sid);
+      final msgs = await repo.getMessages(sid);
+      if (!mounted) return;
+      setState(() {
+        _sessionId = sid;
+        _applyRawMessages(msgs);
+      });
+      await _persistCache();
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     } catch (_) {
       // 恢复失败不影响正常使用，静默忽略
     } finally {
@@ -100,6 +156,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     if (_sessionId != null) return;
     final id = await ref.read(agentRepositoryProvider).createSession();
     _sessionId = id;
+    await _sessionStore.setLastSessionId(_userEmail, id);
   }
 
   Future<void> _sendInteraction({
@@ -120,14 +177,16 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
             interaction: interaction,
           );
       final resp = sent['response'] as Map<String, dynamic>? ?? {};
+      final assistantId = sent['assistant_message_id'] as String?;
       setState(() {
         _items.add(
           _ChatItem.assistant(
             resp,
-            messageId: sent['assistant_message_id'] as String?,
+            messageId: assistantId,
           ),
         );
       });
+      _appendToCache(userLabel, resp, assistantId);
       if (resp['refresh_tasks'] == true) {
         ref.read(taskRepositoryProvider).refreshTasks();
       }
@@ -152,7 +211,18 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
         messageId: messageId,
         initialSubmitted: true,
       );
+      final rawIdx = _rawMessages.indexWhere((m) => m['id'] == messageId);
+      if (rawIdx >= 0) {
+        final json = _rawMessages[rawIdx]['content_json'];
+        if (json is Map<String, dynamic>) {
+          _rawMessages[rawIdx] = {
+            ..._rawMessages[rawIdx],
+            'content_json': {...json, ...patch},
+          };
+        }
+      }
     });
+    unawaited(_persistCache());
   }
 
   Future<void> _send() async {
@@ -171,15 +241,16 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
             clientContext: buildAgentClientContext(),
           );
       final resp = sent['response'] as Map<String, dynamic>? ?? {};
+      final assistantId = sent['assistant_message_id'] as String?;
       setState(() {
         _items.add(
           _ChatItem.assistant(
             resp,
-            messageId: sent['assistant_message_id'] as String?,
+            messageId: assistantId,
           ),
         );
       });
-      // 后端标记了任务已直接创建（create_immediately=true），立即刷新本地任务缓存
+      _appendToCache(text, resp, assistantId);
       if (resp['refresh_tasks'] == true) {
         ref.read(taskRepositoryProvider).refreshTasks();
       }
@@ -224,8 +295,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     // 创建新会话
     try {
       final id = await ref.read(agentRepositoryProvider).createSession();
+      await _sessionStore.clearForUser(_userEmail);
+      await _sessionStore.setLastSessionId(_userEmail, id);
       setState(() {
         _sessionId = id;
+        _rawMessages = [];
         _items.clear();
       });
     } catch (e) {
@@ -345,6 +419,8 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     setState(() {
       _items.add(_ChatItem.assistant(payload));
     });
+    _rawMessages.add({'role': 'assistant', 'content_json': payload});
+    unawaited(_persistCache());
     _scrollToBottom();
   }
 }

@@ -59,7 +59,6 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
       final repo = ref.read(taskRepositoryProvider);
       await repo.stopFocusSession(sessionId: sid, actualSeconds: sec, stopReason: 'manual');
       await repo.refreshFocusStats();
-      await repo.refreshTasks();
     } catch (_) {}
   }
 
@@ -225,24 +224,25 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
     _setRunning(false);
   }
 
-  Future<void> _terminate() async {
+  void _terminate() {
     _ticker?.cancel();
     _ticker = null;
     if (_phase == _Phase.focus) {
       _flushFocusClock();
     }
-    setState(() {
-      _running = false;
-      _sessionLocked = false;
-      _phase = _Phase.focus;
-      _left = Duration(seconds: _sessionFocusSeconds);
-    });
     _focusClockStart = null;
-    await WakelockPlus.disable();
-    await _player.stop();
-    await _reportFocusSession();
-    if (!mounted) return;
-    context.pop();
+    if (mounted) {
+      setState(() {
+        _running = false;
+        _sessionLocked = false;
+        _phase = _Phase.focus;
+        _left = Duration(seconds: _sessionFocusSeconds);
+      });
+      context.pop();
+    }
+    unawaited(_reportFocusSession());
+    unawaited(WakelockPlus.disable());
+    unawaited(_player.stop());
   }
 
   String _mmss(Duration d) {
@@ -451,7 +451,7 @@ class _PomodoroPageState extends ConsumerState<PomodoroPage> {
                   ),
                   const SizedBox(width: 12),
                   OutlinedButton(
-                    onPressed: _terminate,
+                    onPressed: () => _terminate(),
                     style: OutlinedButton.styleFrom(foregroundColor: AppColors.error),
                     child: const Text('终止'),
                   ),
