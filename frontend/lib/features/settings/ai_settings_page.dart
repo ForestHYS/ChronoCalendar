@@ -287,7 +287,7 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                         baseUrlLabel: 'ASR Base URL',
                         apiKeyLabel: 'ASR API Key',
                         modelLabel: 'ASR Model Name',
-                        defaultModelHint: 'gpt-4o-mini-transcribe',
+                        defaultModelHint: 'qwen3-asr-flash',
                         onToggleApiKey: () =>
                             setState(() => _showAsrKey = !_showAsrKey),
                         onSubmitted: () => _save('ASR 配置已更新'),
@@ -332,7 +332,7 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                         baseUrlLabel: 'TTS Base URL',
                         apiKeyLabel: 'TTS API Key',
                         modelLabel: 'TTS Model Name',
-                        defaultModelHint: 'gpt-4o-mini-tts',
+                        defaultModelHint: 'qwen3-tts-flash',
                         onToggleApiKey: () =>
                             setState(() => _showTtsKey = !_showTtsKey),
                         onSubmitted: () => _save('TTS 配置已更新'),
@@ -342,7 +342,7 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                         controller: _ttsVoiceC,
                         decoration: const InputDecoration(
                           labelText: 'TTS Voice',
-                          hintText: 'alloy',
+                          hintText: 'Cherry',
                         ),
                         textInputAction: TextInputAction.done,
                         onSubmitted: (_) => _save('TTS 配置已更新'),

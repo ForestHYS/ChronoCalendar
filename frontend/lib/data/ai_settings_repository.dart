@@ -1,5 +1,9 @@
 import '../core/api/api_client.dart';
 
+const _defaultAsrModel = 'qwen3-asr-flash';
+const _defaultTtsModel = 'qwen3-tts-flash';
+const _defaultTtsVoice = 'Cherry';
+
 class AiSettings {
   const AiSettings({
     required this.baseUrl,
@@ -39,11 +43,11 @@ class AiSettingsRepository {
       final modelName = data['model_name'] as String? ?? '';
       final asrBaseUrl = data['asr_base_url'] as String? ?? '';
       final hasAsrApiKey = data['has_asr_api_key'] == true;
-      final asrModel = data['asr_model'] as String? ?? 'gpt-4o-mini-transcribe';
+      final asrModel = data['asr_model'] as String? ?? _defaultAsrModel;
       final ttsBaseUrl = data['tts_base_url'] as String? ?? '';
       final hasTtsApiKey = data['has_tts_api_key'] == true;
-      final ttsModel = data['tts_model'] as String? ?? 'gpt-4o-mini-tts';
-      final ttsVoice = data['tts_voice'] as String? ?? 'alloy';
+      final ttsModel = data['tts_model'] as String? ?? _defaultTtsModel;
+      final ttsVoice = data['tts_voice'] as String? ?? _defaultTtsVoice;
       return AiSettings(
         baseUrl: baseUrl,
         hasApiKey: hasApiKey,
@@ -63,11 +67,11 @@ class AiSettingsRepository {
       modelName: '',
       asrBaseUrl: '',
       hasAsrApiKey: false,
-      asrModel: 'gpt-4o-mini-transcribe',
+      asrModel: _defaultAsrModel,
       ttsBaseUrl: '',
       hasTtsApiKey: false,
-      ttsModel: 'gpt-4o-mini-tts',
-      ttsVoice: 'alloy',
+      ttsModel: _defaultTtsModel,
+      ttsVoice: _defaultTtsVoice,
     );
   }
 
@@ -106,12 +110,11 @@ class AiSettingsRepository {
       final nextModelName = data['model_name'] as String? ?? '';
       final nextAsrBaseUrl = data['asr_base_url'] as String? ?? '';
       final hasAsrApiKey = data['has_asr_api_key'] == true;
-      final nextAsrModel =
-          data['asr_model'] as String? ?? 'gpt-4o-mini-transcribe';
+      final nextAsrModel = data['asr_model'] as String? ?? _defaultAsrModel;
       final nextTtsBaseUrl = data['tts_base_url'] as String? ?? '';
       final hasTtsApiKey = data['has_tts_api_key'] == true;
-      final nextTtsModel = data['tts_model'] as String? ?? 'gpt-4o-mini-tts';
-      final nextTtsVoice = data['tts_voice'] as String? ?? 'alloy';
+      final nextTtsModel = data['tts_model'] as String? ?? _defaultTtsModel;
+      final nextTtsVoice = data['tts_voice'] as String? ?? _defaultTtsVoice;
       return AiSettings(
         baseUrl: nextBaseUrl,
         hasApiKey: hasApiKey,
@@ -131,11 +134,11 @@ class AiSettingsRepository {
       modelName: '',
       asrBaseUrl: '',
       hasAsrApiKey: false,
-      asrModel: 'gpt-4o-mini-transcribe',
+      asrModel: _defaultAsrModel,
       ttsBaseUrl: '',
       hasTtsApiKey: false,
-      ttsModel: 'gpt-4o-mini-tts',
-      ttsVoice: 'alloy',
+      ttsModel: _defaultTtsModel,
+      ttsVoice: _defaultTtsVoice,
     );
   }
 

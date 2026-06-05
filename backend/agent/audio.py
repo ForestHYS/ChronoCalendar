@@ -1,9 +1,11 @@
 import base64
 import binascii
-import io
+import json
 import logging
 from dataclasses import dataclass
 from typing import Optional
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 from django.conf import settings
 from openai import (
@@ -15,13 +17,15 @@ from openai import (
     RateLimitError,
 )
 
-from .llm import _load_llm_config
-
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_ASR_MODEL = "gpt-4o-mini-transcribe"
-DEFAULT_TTS_MODEL = "gpt-4o-mini-tts"
+DEFAULT_ASR_MODEL = "qwen3-asr-flash"
+DEFAULT_TTS_MODEL = "qwen3-tts-flash"
+DEFAULT_TTS_VOICE = "Cherry"
+DEFAULT_ASR_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+DEFAULT_TTS_BASE_URL = "https://dashscope.aliyuncs.com/api/v1"
+QWEN_TTS_PATH = "/services/aigc/multimodal-generation/generation"
 SUPPORTED_INPUT_FORMATS = {"wav", "mp3"}
 SUPPORTED_OUTPUT_FORMATS = {"mp3", "wav"}
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
@@ -43,7 +47,9 @@ def _tts_model(user_id: str) -> str:
 
 
 def _tts_voice(user_id: str, requested: str) -> str:
-    return (requested or _voice_config_value(user_id, "tts_voice", "alloy")).strip()
+    return (
+        requested or _voice_config_value(user_id, "tts_voice", DEFAULT_TTS_VOICE)
+    ).strip()
 
 
 def _voice_config_value(user_id: str, field: str, default: str) -> str:
@@ -69,7 +75,16 @@ def _default_tts_model() -> str:
 
 
 def _voice_credentials(user_id: str, kind: str) -> tuple[str, Optional[str]]:
-    fallback_key, fallback_base_url, _ = _load_llm_config(user_id)
+    fallback_key = (
+        getattr(settings, f"AGENT_{kind.upper()}_API_KEY", "")
+        or ""
+    ).strip()
+    fallback_base_url = (
+        getattr(settings, f"AGENT_{kind.upper()}_BASE_URL", "")
+        or (
+            DEFAULT_ASR_BASE_URL if kind == "asr" else DEFAULT_TTS_BASE_URL
+        )
+    ).strip()
     try:
         from .models import UserLlmConfig
 
@@ -83,8 +98,8 @@ def _voice_credentials(user_id: str, kind: str) -> tuple[str, Optional[str]]:
     api_key = (getattr(cfg, f"{kind}_api_key", "") or "").strip()
     base_url_raw = (getattr(cfg, f"{kind}_base_url", "") or "").strip()
     return (
-        api_key,
-        base_url_raw.rstrip("/") if base_url_raw else None,
+        api_key or fallback_key,
+        base_url_raw.rstrip("/") if base_url_raw else fallback_base_url.rstrip("/"),
     )
 
 
@@ -107,6 +122,51 @@ def _decode_audio(audio_base64: str) -> bytes:
         return base64.b64decode(audio_base64, validate=True)
     except (binascii.Error, ValueError) as e:
         raise ValueError("invalid_base64") from e
+
+
+def _audio_data_uri(raw: bytes, audio_format: str) -> str:
+    mime = "audio/mpeg" if audio_format == "mp3" else "audio/wav"
+    encoded = base64.b64encode(raw).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
+def _qwen_tts_url(base_url: Optional[str]) -> str:
+    root = (base_url or DEFAULT_TTS_BASE_URL).rstrip("/")
+    if root.endswith("/generation"):
+        return root
+    return f"{root}{QWEN_TTS_PATH}"
+
+
+def _language_type(text: str) -> str:
+    return "Chinese" if any("\u4e00" <= ch <= "\u9fff" for ch in text) else "English"
+
+
+def _extract_tts_audio_url(data: dict) -> str:
+    output = data.get("output")
+    if isinstance(output, dict):
+        audio = output.get("audio")
+        if isinstance(audio, dict):
+            url = audio.get("url")
+            if isinstance(url, str) and url:
+                return url
+        url = output.get("url")
+        if isinstance(url, str) and url:
+            return url
+    return ""
+
+
+def _download_audio(url: str) -> tuple[bytes, str]:
+    req = urlrequest.Request(url, headers={"User-Agent": "ChronoCalendar/1.0"})
+    with urlrequest.urlopen(req, timeout=30) as resp:
+        content_type = resp.headers.get("Content-Type", "")
+        return resp.read(), content_type
+
+
+def _audio_format_from_content_type(content_type: str) -> str:
+    value = (content_type or "").lower()
+    if "wav" in value:
+        return "wav"
+    return "mp3"
 
 
 def transcribe_with_audio_model(
@@ -134,14 +194,26 @@ def transcribe_with_audio_model(
 
     model = _asr_model(user_id)
     try:
-        audio_file = io.BytesIO(raw)
-        audio_file.name = f"audio.{audio_format}"
-        resp = client.audio.transcriptions.create(
+        resp = client.chat.completions.create(
             model=model,
-            file=audio_file,
-            response_format="json",
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_audio",
+                            "input_audio": {"data": _audio_data_uri(raw, audio_format)},
+                        }
+                    ],
+                }
+            ],
+            extra_body={
+                "asr_options": {
+                    "enable_itn": True,
+                }
+            },
         )
-        text = (getattr(resp, "text", "") or "").strip()
+        text = (resp.choices[0].message.content or "").strip()
         return AudioResult(ok=True, data={"text": text, "model": model})
     except AuthenticationError:
         return AudioResult(ok=False, data=None, error="invalid_api_key")
@@ -168,7 +240,7 @@ def synthesize_with_audio_model(
     *,
     user_id: str,
     text: str,
-    voice: str = "alloy",
+    voice: str = DEFAULT_TTS_VOICE,
     audio_format: str = "mp3",
 ) -> AudioResult:
     text = (text or "").strip()
@@ -181,60 +253,60 @@ def synthesize_with_audio_model(
     if audio_format not in SUPPORTED_OUTPUT_FORMATS:
         return AudioResult(ok=False, data=None, error="unsupported_format")
 
-    client, base_url, err = _client_for_user(user_id, "tts")
-    if err:
-        return AudioResult(ok=False, data=None, error=err)
+    api_key, base_url = _voice_credentials(user_id, "tts")
+    if not api_key:
+        return AudioResult(ok=False, data=None, error="missing_api_key")
 
     model = _tts_model(user_id)
     try:
-        resp = client.audio.speech.create(
-            model=model,
-            voice=voice,
-            input=text,
-            response_format=audio_format,
-            instructions="Speak in a natural, clear, concise assistant voice.",
+        payload = {
+            "model": model,
+            "input": {
+                "text": text,
+                "voice": voice,
+                "language_type": _language_type(text),
+            },
+        }
+        req = urlrequest.Request(
+            _qwen_tts_url(base_url),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
         )
-        audio_bytes = _binary_response_bytes(resp)
+        with urlrequest.urlopen(req, timeout=60) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        audio_url = _extract_tts_audio_url(data)
+        if not audio_url:
+            return AudioResult(ok=False, data=None, error="empty_audio_response")
+        audio_bytes, content_type = _download_audio(audio_url)
         if not audio_bytes:
             return AudioResult(ok=False, data=None, error="empty_audio_response")
-        mime = "audio/mpeg" if audio_format == "mp3" else "audio/wav"
+        output_format = _audio_format_from_content_type(content_type)
+        mime = "audio/mpeg" if output_format == "mp3" else "audio/wav"
         return AudioResult(
             ok=True,
             data={
                 "audio_base64": base64.b64encode(audio_bytes).decode("ascii"),
-                "format": audio_format,
+                "format": output_format,
                 "mime_type": mime,
                 "model": model,
             },
         )
-    except AuthenticationError:
-        return AudioResult(ok=False, data=None, error="invalid_api_key")
-    except APITimeoutError:
-        return AudioResult(ok=False, data=None, error="timeout")
-    except APIConnectionError:
+    except urlerror.HTTPError as e:
+        if e.code in (401, 403):
+            return AudioResult(ok=False, data=None, error="invalid_api_key")
+        if e.code == 429:
+            return AudioResult(ok=False, data=None, error="rate_limit")
+        logger.warning("Audio TTS HTTPError (model=%s status=%s)", model, e.code)
+        return AudioResult(ok=False, data=None, error=f"http_error:{e.code}")
+    except urlerror.URLError as e:
+        reason = str(getattr(e, "reason", e))
+        if "timed out" in reason.lower():
+            return AudioResult(ok=False, data=None, error="timeout")
         return AudioResult(ok=False, data=None, error="connection_error")
-    except RateLimitError:
-        return AudioResult(ok=False, data=None, error="rate_limit")
-    except OpenAIError as e:
-        logger.warning(
-            "Audio TTS OpenAIError (model=%s base_url=%s type=%s)",
-            model,
-            base_url or "default",
-            type(e).__name__,
-        )
-        return AudioResult(ok=False, data=None, error=f"openai_error:{type(e).__name__}")
     except Exception as e:
         logger.exception("Audio TTS unexpected error")
         return AudioResult(ok=False, data=None, error=f"audio_error:{type(e).__name__}")
-
-
-def _binary_response_bytes(resp) -> bytes:
-    content = getattr(resp, "content", None)
-    if isinstance(content, bytes):
-        return content
-    read = getattr(resp, "read", None)
-    if callable(read):
-        data = read()
-        if isinstance(data, bytes):
-            return data
-    return b""

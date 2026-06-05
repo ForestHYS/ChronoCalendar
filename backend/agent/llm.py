@@ -18,7 +18,7 @@ class LlmResult:
 
 
 def _default_model() -> str:
-    return getattr(settings, "AGENT_LLM_MODEL", "gpt-4o-mini")
+    return getattr(settings, "AGENT_LLM_MODEL", "deepseek-v4-flash")
 
 
 def _json_max_retries() -> int:

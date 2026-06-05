@@ -267,32 +267,46 @@ class UserLlmConfigView(APIView):
     permission_classes = [IsAuthenticated]
 
     def _payload(self, cfg):
-        default_asr_model = getattr(settings, "AGENT_ASR_MODEL", "gpt-4o-mini-transcribe")
-        default_tts_model = getattr(settings, "AGENT_TTS_MODEL", "gpt-4o-mini-tts")
+        default_asr_model = getattr(settings, "AGENT_ASR_MODEL", "qwen3-asr-flash")
+        default_tts_model = getattr(settings, "AGENT_TTS_MODEL", "qwen3-tts-flash")
         if not cfg:
             return {
                 "base_url": "",
                 "has_api_key": False,
                 "model_name": "",
-                "asr_base_url": "",
+                "asr_base_url": getattr(
+                    settings,
+                    "AGENT_ASR_BASE_URL",
+                    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                ),
                 "has_asr_api_key": False,
                 "asr_model": default_asr_model,
-                "tts_base_url": "",
+                "tts_base_url": getattr(
+                    settings,
+                    "AGENT_TTS_BASE_URL",
+                    "https://dashscope.aliyuncs.com/api/v1",
+                ),
                 "has_tts_api_key": False,
                 "tts_model": default_tts_model,
-                "tts_voice": "alloy",
+                "tts_voice": "Cherry",
             }
         return {
             "base_url": cfg.base_url,
             "has_api_key": bool(cfg.api_key),
             "model_name": cfg.model_name,
-            "asr_base_url": cfg.asr_base_url,
+            "asr_base_url": cfg.asr_base_url
+            or getattr(
+                settings,
+                "AGENT_ASR_BASE_URL",
+                "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            ),
             "has_asr_api_key": bool(cfg.asr_api_key),
             "asr_model": cfg.asr_model or default_asr_model,
-            "tts_base_url": cfg.tts_base_url,
+            "tts_base_url": cfg.tts_base_url
+            or getattr(settings, "AGENT_TTS_BASE_URL", "https://dashscope.aliyuncs.com/api/v1"),
             "has_tts_api_key": bool(cfg.tts_api_key),
             "tts_model": cfg.tts_model or default_tts_model,
-            "tts_voice": cfg.tts_voice or "alloy",
+            "tts_voice": cfg.tts_voice or "Cherry",
         }
 
     def get(self, request):
@@ -367,7 +381,7 @@ class UserLlmConfigTestView(APIView):
 
         base_url = (base_url or "").strip().rstrip("/")
         api_key = (api_key or "").strip()
-        model_name = (model_name or "").strip() or getattr(settings, "AGENT_LLM_MODEL", "gpt-4o-mini")
+        model_name = (model_name or "").strip() or getattr(settings, "AGENT_LLM_MODEL", "gpt-5")
 
         result = test_llm_connection(
             api_key=api_key,
