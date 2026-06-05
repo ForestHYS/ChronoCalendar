@@ -319,7 +319,17 @@ def _run_tool(state: AgentState) -> AgentState:
             }
             state["response"] = {}
             return state
-        state["response"] = {"type": "open_editor", "task_draft": draft}
+        message = _say(
+            state,
+            "task_draft_ready",
+            {"task_draft": draft},
+        )
+        state["response"] = {
+            "type": "open_editor",
+            "task_draft": draft,
+            "message": message,
+            "text": message,
+        }
         return state
     if action != "tool":
         state["last_tool"] = {
@@ -436,6 +446,7 @@ def _compose_build_task_draft(state: AgentState, draft: dict) -> None:
             {"task_draft": clean_draft},
         ),
     }
+    state["response"]["text"] = state["response"]["message"]
 
 
 def _compose_check_block_conflict(state: AgentState, out: dict, args: dict) -> None:
@@ -464,6 +475,7 @@ def _compose_check_block_conflict(state: AgentState, out: dict, args: dict) -> N
             {"conflict": conflict, "task_draft": draft},
         ),
     }
+    resp["text"] = resp["message"]
     if conflict:
         resp["conflict"] = conflict
     state["response"] = resp

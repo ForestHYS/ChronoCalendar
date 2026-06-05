@@ -94,7 +94,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     );
   }
 
-  void _appendToCache(String userText, Map<String, dynamic> resp, String? assistantId) {
+  void _appendToCache(
+    String userText,
+    Map<String, dynamic> resp,
+    String? assistantId,
+  ) {
     _rawMessages.add({'role': 'user', 'content_text': userText});
     _rawMessages.add({
       'role': 'assistant',
@@ -289,12 +293,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
       final resp = sent['response'] as Map<String, dynamic>? ?? {};
       final assistantId = sent['assistant_message_id'] as String?;
       setState(() {
-        _items.add(
-          _ChatItem.assistant(
-            resp,
-            messageId: assistantId,
-          ),
-        );
+        _items.add(_ChatItem.assistant(resp, messageId: assistantId));
       });
       _appendToCache(userLabel, resp, assistantId);
       if (resp['refresh_tasks'] == true) {
@@ -358,12 +357,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
       final resp = sent['response'] as Map<String, dynamic>? ?? {};
       final assistantId = sent['assistant_message_id'] as String?;
       setState(() {
-        _items.add(
-          _ChatItem.assistant(
-            resp,
-            messageId: assistantId,
-          ),
-        );
+        _items.add(_ChatItem.assistant(resp, messageId: assistantId));
       });
       _appendToCache(text, resp, assistantId);
       if (resp['refresh_tasks'] == true) {
@@ -681,7 +675,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
           ? (payload['task_draft'] as Map<String, dynamic>)
           : <String, dynamic>{};
       final conflict = payload['conflict'];
-      final message = payload['message'];
+      final message = _openEditorMessage(payload, draft);
 
       return ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 340),
@@ -700,9 +694,9 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                   _draftSummary(draft),
                   style: const TextStyle(color: AppColors.onSurfaceVariant),
                 ),
-                if (message is String && message.isNotEmpty) ...[
+                if (message.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  Text(message),
+                  _SpeakableTextRow(text: message, onSpeak: widget.onSpeak),
                 ],
                 if (conflict is Map<String, dynamic> && !_submitted) ...[
                   const SizedBox(height: 10),
@@ -775,7 +769,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                   style: TextStyle(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
-                Text(summary),
+                _SpeakableTextRow(text: summary, onSpeak: widget.onSpeak),
                 const SizedBox(height: 12),
                 if (_submitted)
                   Row(
@@ -877,6 +871,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
             payload['plan_answered'] == true,
         onSendInteraction: widget.onSendInteraction,
         onFollowUp: onFollowUp,
+        onSpeak: widget.onSpeak,
         onDone: widget.onPlanInteractionDone,
       );
     }
@@ -891,6 +886,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
             payload['outline_confirmed'] == true,
         onSendInteraction: widget.onSendInteraction,
         onFollowUp: onFollowUp,
+        onSpeak: widget.onSpeak,
         onDone: widget.onPlanInteractionDone,
       );
     }
@@ -905,6 +901,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
             payload['plan_confirmed'] == true,
         onFollowUp: onFollowUp,
         onPlanConfirmed: widget.onPlanConfirmed,
+        onSpeak: widget.onSpeak,
       );
     }
 
@@ -917,24 +914,26 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
       child: Card(
         child: Padding(
           padding: const EdgeInsets.all(14),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: Text(text)),
-              const SizedBox(width: 8),
-              IconButton(
-                tooltip: '朗读',
-                visualDensity: VisualDensity.compact,
-                onPressed: text.trim().isEmpty
-                    ? null
-                    : () => widget.onSpeak(text),
-                icon: const Icon(Icons.volume_up_outlined),
-              ),
-            ],
-          ),
+          child: _SpeakableTextRow(text: text, onSpeak: widget.onSpeak),
         ),
       ),
     );
+  }
+
+  String _openEditorMessage(
+    Map<String, dynamic> payload,
+    Map<String, dynamic> draft,
+  ) {
+    final explicit =
+        ((payload['message'] as String?) ?? (payload['text'] as String?))
+            ?.trim() ??
+        '';
+    if (explicit.isNotEmpty) return explicit;
+    final title = (draft['title'] as String?)?.trim();
+    if (title != null && title.isNotEmpty) {
+      return '已为你生成任务草稿：$title，请确认后保存。';
+    }
+    return '已为你生成任务草稿，请确认后保存。';
   }
 
   String _draftSummary(Map<String, dynamic> d) {
@@ -963,6 +962,36 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
     if (type == 'todo' && em != null) buf.write(' · 预计 $em 分钟');
     if (type == 'todo' && subCount > 0) buf.write(' · $subCount 个子任务');
     return buf.toString();
+  }
+}
+
+class _SpeakableTextRow extends StatelessWidget {
+  const _SpeakableTextRow({
+    required this.text,
+    required this.onSpeak,
+    this.style,
+  });
+
+  final String text;
+  final TextStyle? style;
+  final Future<void> Function(String text) onSpeak;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = text.trim();
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: Text(text, style: style)),
+        const SizedBox(width: 8),
+        IconButton(
+          tooltip: '朗读',
+          visualDensity: VisualDensity.compact,
+          onPressed: value.isEmpty ? null : () => onSpeak(value),
+          icon: const Icon(Icons.volume_up_outlined),
+        ),
+      ],
+    );
   }
 }
 
@@ -1123,6 +1152,7 @@ class _PlanQuestionsCard extends StatefulWidget {
   const _PlanQuestionsCard({
     required this.payload,
     required this.onSendInteraction,
+    required this.onSpeak,
     this.messageId,
     this.initialSubmitted = false,
     this.onFollowUp,
@@ -1137,6 +1167,7 @@ class _PlanQuestionsCard extends StatefulWidget {
     required Map<String, dynamic> interaction,
   })
   onSendInteraction;
+  final Future<void> Function(String text) onSpeak;
   final void Function(Map<String, dynamic> payload)? onFollowUp;
   final void Function(String messageId, Map<String, dynamic> patch)? onDone;
 
@@ -1248,8 +1279,9 @@ class _PlanQuestionsCardState extends State<_PlanQuestionsCard> {
               ),
               if (message.isNotEmpty) ...[
                 const SizedBox(height: 6),
-                Text(
-                  message,
+                _SpeakableTextRow(
+                  text: message,
+                  onSpeak: widget.onSpeak,
                   style: const TextStyle(color: AppColors.onSurfaceVariant),
                 ),
               ],
@@ -1328,6 +1360,7 @@ class _PlanOutlineCard extends StatefulWidget {
   const _PlanOutlineCard({
     required this.payload,
     required this.onSendInteraction,
+    required this.onSpeak,
     this.messageId,
     this.initialSubmitted = false,
     this.onFollowUp,
@@ -1342,6 +1375,7 @@ class _PlanOutlineCard extends StatefulWidget {
     required Map<String, dynamic> interaction,
   })
   onSendInteraction;
+  final Future<void> Function(String text) onSpeak;
   final void Function(Map<String, dynamic> payload)? onFollowUp;
   final void Function(String messageId, Map<String, dynamic> patch)? onDone;
 
@@ -1417,8 +1451,9 @@ class _PlanOutlineCardState extends State<_PlanOutlineCard> {
               ),
               if (message.isNotEmpty) ...[
                 const SizedBox(height: 6),
-                Text(
-                  message,
+                _SpeakableTextRow(
+                  text: message,
+                  onSpeak: widget.onSpeak,
                   style: const TextStyle(color: AppColors.onSurfaceVariant),
                 ),
               ],
@@ -1509,6 +1544,7 @@ class _PlanPreviewCard extends ConsumerStatefulWidget {
   const _PlanPreviewCard({
     required this.payload,
     required this.onFollowUp,
+    required this.onSpeak,
     this.messageId,
     this.initialSubmitted = false,
     this.onPlanConfirmed,
@@ -1518,6 +1554,7 @@ class _PlanPreviewCard extends ConsumerStatefulWidget {
   final String? messageId;
   final bool initialSubmitted;
   final void Function(Map<String, dynamic> payload) onFollowUp;
+  final Future<void> Function(String text) onSpeak;
   final void Function(String messageId)? onPlanConfirmed;
 
   @override
@@ -1615,8 +1652,9 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
               ),
               if (message.isNotEmpty) ...[
                 const SizedBox(height: 6),
-                Text(
-                  message,
+                _SpeakableTextRow(
+                  text: message,
+                  onSpeak: widget.onSpeak,
                   style: const TextStyle(color: AppColors.onSurfaceVariant),
                 ),
               ],
