@@ -269,11 +269,21 @@ class UserLlmConfigView(APIView):
     def get(self, request):
         cfg = UserLlmConfig.objects.filter(user=request.user).first()
         if not cfg:
-            return ok({"base_url": "", "has_api_key": False, "model_name": ""})
+            return ok({
+                "base_url": "",
+                "has_api_key": False,
+                "model_name": "",
+                "asr_model": getattr(settings, "AGENT_ASR_MODEL", "gpt-4o-mini-transcribe"),
+                "tts_model": getattr(settings, "AGENT_TTS_MODEL", "gpt-4o-mini-tts"),
+                "tts_voice": "alloy",
+            })
         return ok({
             "base_url": cfg.base_url,
             "has_api_key": bool(cfg.api_key),
             "model_name": cfg.model_name,
+            "asr_model": cfg.asr_model or getattr(settings, "AGENT_ASR_MODEL", "gpt-4o-mini-transcribe"),
+            "tts_model": cfg.tts_model or getattr(settings, "AGENT_TTS_MODEL", "gpt-4o-mini-tts"),
+            "tts_voice": cfg.tts_voice or "alloy",
         })
 
     def patch(self, request):
@@ -295,6 +305,15 @@ class UserLlmConfigView(APIView):
         if "model_name" in data:
             cfg.model_name = (data.get("model_name") or "").strip()
             update_fields.append("model_name")
+        if "asr_model" in data:
+            cfg.asr_model = (data.get("asr_model") or "").strip()
+            update_fields.append("asr_model")
+        if "tts_model" in data:
+            cfg.tts_model = (data.get("tts_model") or "").strip()
+            update_fields.append("tts_model")
+        if "tts_voice" in data:
+            cfg.tts_voice = (data.get("tts_voice") or "").strip()
+            update_fields.append("tts_voice")
 
         if update_fields:
             cfg.save(update_fields=update_fields + ["updated_at"])
@@ -303,6 +322,9 @@ class UserLlmConfigView(APIView):
             "base_url": cfg.base_url,
             "has_api_key": bool(cfg.api_key),
             "model_name": cfg.model_name,
+            "asr_model": cfg.asr_model or getattr(settings, "AGENT_ASR_MODEL", "gpt-4o-mini-transcribe"),
+            "tts_model": cfg.tts_model or getattr(settings, "AGENT_TTS_MODEL", "gpt-4o-mini-tts"),
+            "tts_voice": cfg.tts_voice or "alloy",
         })
 
 

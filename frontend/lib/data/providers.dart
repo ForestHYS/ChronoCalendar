@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/api/api_client.dart';
 import '../core/notifications/notification_service.dart';
 import '../core/notifications/reminder_scheduler.dart';
+import '../core/voice/cloud_speech_recognizer_service.dart';
+import '../core/voice/cloud_speech_synthesizer_service.dart';
 import '../core/voice/speech_recognizer_service.dart';
 import '../core/voice/speech_synthesizer_service.dart';
 import '../core/voice/system_speech_recognizer_service.dart';
@@ -57,7 +59,10 @@ final aiSettingsRepositoryProvider = Provider<AiSettingsRepository>((ref) {
 final speechRecognizerServiceProvider = Provider<SpeechRecognizerService>((
   ref,
 ) {
-  final service = SystemSpeechRecognizerService();
+  final settings = ref.watch(appSettingsRepositoryProvider);
+  final service = settings.agentAsrProvider == 'local'
+      ? SystemSpeechRecognizerService()
+      : CloudSpeechRecognizerService(ref.watch(apiClientProvider));
   ref.onDispose(service.cancel);
   return service;
 });
@@ -65,8 +70,17 @@ final speechRecognizerServiceProvider = Provider<SpeechRecognizerService>((
 final speechSynthesizerServiceProvider = Provider<SpeechSynthesizerService>((
   ref,
 ) {
-  final service = SystemSpeechSynthesizerService();
-  ref.onDispose(service.stop);
+  final settings = ref.watch(appSettingsRepositoryProvider);
+  final service = settings.agentTtsProvider == 'local'
+      ? SystemSpeechSynthesizerService()
+      : CloudSpeechSynthesizerService(ref.watch(apiClientProvider));
+  ref.onDispose(() {
+    if (service is CloudSpeechSynthesizerService) {
+      service.dispose();
+    } else {
+      service.stop();
+    }
+  });
   return service;
 });
 

@@ -19,6 +19,9 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
   final _baseUrlC = TextEditingController();
   final _apiKeyC = TextEditingController();
   final _modelC = TextEditingController();
+  final _asrModelC = TextEditingController();
+  final _ttsModelC = TextEditingController();
+  final _ttsVoiceC = TextEditingController();
 
   bool _loading = true;
   bool _saving = false;
@@ -37,6 +40,9 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
     _baseUrlC.dispose();
     _apiKeyC.dispose();
     _modelC.dispose();
+    _asrModelC.dispose();
+    _ttsModelC.dispose();
+    _ttsVoiceC.dispose();
     super.dispose();
   }
 
@@ -46,6 +52,9 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
       final cfg = await repo.fetch();
       _baseUrlC.text = cfg.baseUrl;
       _modelC.text = cfg.modelName;
+      _asrModelC.text = cfg.asrModel;
+      _ttsModelC.text = cfg.ttsModel;
+      _ttsVoiceC.text = cfg.ttsVoice;
       _hasKey = cfg.hasApiKey;
     } catch (e) {
       if (mounted) {
@@ -70,13 +79,22 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
       final baseUrl = _normalizeBaseUrl(_baseUrlC.text);
       final apiKey = _apiKeyC.text.trim();
       final modelName = _modelC.text.trim();
+      final asrModel = _asrModelC.text.trim();
+      final ttsModel = _ttsModelC.text.trim();
+      final ttsVoice = _ttsVoiceC.text.trim();
       final cfg = await repo.update(
         baseUrl: baseUrl,
         apiKey: apiKey.isNotEmpty ? apiKey : null,
         modelName: modelName,
+        asrModel: asrModel,
+        ttsModel: ttsModel,
+        ttsVoice: ttsVoice,
       );
       _baseUrlC.text = cfg.baseUrl;
       _modelC.text = cfg.modelName;
+      _asrModelC.text = cfg.asrModel;
+      _ttsModelC.text = cfg.ttsModel;
+      _ttsVoiceC.text = cfg.ttsVoice;
       _hasKey = cfg.hasApiKey;
       _apiKeyC.clear();
       if (mounted) {
@@ -111,7 +129,11 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
       final cfg = await repo.update(apiKey: '');
       _hasKey = cfg.hasApiKey;
       if (mounted) {
-        await showAppMessageDialog(context, title: '已清除', message: 'API Key 已移除');
+        await showAppMessageDialog(
+          context,
+          title: '已清除',
+          message: 'API Key 已移除',
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -149,6 +171,7 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final appSettings = ref.watch(appSettingsRepositoryProvider);
     return Scaffold(
       backgroundColor: AppColors.surface,
       appBar: AppBar(
@@ -170,12 +193,18 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                     children: [
                       const Text(
                         '自定义 AI 接口',
-                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       const Text(
                         '配置会保存到服务器，仅对当前账号生效。',
-                        style: TextStyle(color: AppColors.onSurfaceVariant, fontSize: 12),
+                        style: TextStyle(
+                          color: AppColors.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
                       ),
                       const SizedBox(height: 14),
                       TextField(
@@ -195,8 +224,13 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                           labelText: 'API Key',
                           hintText: _hasKey ? '已保存（留空保持不变）' : '请输入 API Key',
                           suffixIcon: IconButton(
-                            icon: Icon(_showKey ? Icons.visibility_off : Icons.visibility),
-                            onPressed: () => setState(() => _showKey = !_showKey),
+                            icon: Icon(
+                              _showKey
+                                  ? Icons.visibility_off
+                                  : Icons.visibility,
+                            ),
+                            onPressed: () =>
+                                setState(() => _showKey = !_showKey),
                           ),
                         ),
                         textInputAction: TextInputAction.done,
@@ -216,14 +250,21 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                       Row(
                         children: [
                           Icon(
-                            _hasKey ? Icons.verified_rounded : Icons.info_outline,
+                            _hasKey
+                                ? Icons.verified_rounded
+                                : Icons.info_outline,
                             size: 16,
-                            color: _hasKey ? AppColors.primary : AppColors.onSurfaceVariant,
+                            color: _hasKey
+                                ? AppColors.primary
+                                : AppColors.onSurfaceVariant,
                           ),
                           const SizedBox(width: 6),
                           Text(
                             _hasKey ? '已保存 API Key' : '未保存 API Key',
-                            style: const TextStyle(color: AppColors.onSurfaceVariant, fontSize: 12),
+                            style: const TextStyle(
+                              color: AppColors.onSurfaceVariant,
+                              fontSize: 12,
+                            ),
                           ),
                           const Spacer(),
                           if (_hasKey)
@@ -254,8 +295,116 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                     ],
                   ),
                 ),
+                const SizedBox(height: 12),
+                AppCard(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        '语音交互',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        '本地模式使用系统语音能力；云端模式通过后端代理调用当前账号的 API 配置。',
+                        style: TextStyle(
+                          color: AppColors.onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      _VoiceProviderRow(
+                        title: '语音识别 ASR',
+                        value: appSettings.agentAsrProvider,
+                        onChanged: (value) => ref
+                            .read(appSettingsRepositoryProvider)
+                            .setAgentAsrProvider(value),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _asrModelC,
+                        decoration: const InputDecoration(
+                          labelText: 'ASR 云端模型',
+                          hintText: 'gpt-4o-mini-transcribe',
+                        ),
+                        textInputAction: TextInputAction.next,
+                      ),
+                      const SizedBox(height: 14),
+                      _VoiceProviderRow(
+                        title: '语音合成 TTS',
+                        value: appSettings.agentTtsProvider,
+                        onChanged: (value) => ref
+                            .read(appSettingsRepositoryProvider)
+                            .setAgentTtsProvider(value),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _ttsModelC,
+                        decoration: const InputDecoration(
+                          labelText: 'TTS 云端模型',
+                          hintText: 'gpt-4o-mini-tts',
+                        ),
+                        textInputAction: TextInputAction.next,
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _ttsVoiceC,
+                        decoration: const InputDecoration(
+                          labelText: 'TTS Voice',
+                          hintText: 'alloy',
+                        ),
+                        textInputAction: TextInputAction.done,
+                        onSubmitted: (_) => _save(),
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton(
+                        onPressed: (_saving || _testing) ? null : _save,
+                        child: Text(_saving ? '保存中...' : '保存语音配置'),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
+    );
+  }
+}
+
+class _VoiceProviderRow extends StatelessWidget {
+  const _VoiceProviderRow({
+    required this.title,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final String title;
+  final String value;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'local', label: Text('本地')),
+            ButtonSegment(value: 'cloud', label: Text('云端')),
+          ],
+          selected: {value == 'local' ? 'local' : 'cloud'},
+          onSelectionChanged: (next) => onChanged(next.first),
+          showSelectedIcon: false,
+        ),
+      ],
     );
   }
 }

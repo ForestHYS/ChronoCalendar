@@ -6,6 +6,8 @@ const _kAutoDeleteOverdueHours = 'auto_delete_overdue_hours';
 const _kPinnedTodoIds = 'pinned_todo_ids';
 const _kHomeTodoShortcutIds = 'home_todo_shortcut_ids';
 const _kAgentAutoSpeak = 'agent_auto_speak';
+const _kAgentAsrProvider = 'agent_asr_provider';
+const _kAgentTtsProvider = 'agent_tts_provider';
 
 /// 应用级本地偏好（非番茄钟）。
 class AppSettingsRepository extends ChangeNotifier {
@@ -33,6 +35,10 @@ class AppSettingsRepository extends ChangeNotifier {
   );
 
   bool get agentAutoSpeak => _prefs.getBool(_kAgentAutoSpeak) ?? false;
+
+  String get agentAsrProvider => _voiceProvider(_kAgentAsrProvider);
+
+  String get agentTtsProvider => _voiceProvider(_kAgentTtsProvider);
 
   bool isTodoPinned(String id) => pinnedTodoIds.contains(id);
 
@@ -80,6 +86,22 @@ class AppSettingsRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setAgentAsrProvider(String provider) async {
+    await _prefs.setString(
+      _kAgentAsrProvider,
+      _normalizeVoiceProvider(provider),
+    );
+    notifyListeners();
+  }
+
+  Future<void> setAgentTtsProvider(String provider) async {
+    await _prefs.setString(
+      _kAgentTtsProvider,
+      _normalizeVoiceProvider(provider),
+    );
+    notifyListeners();
+  }
+
   /// 固定 Todo 到主页快捷栏；已满 [maxPinnedTodos] 个时返回 `false`。
   Future<bool> setTodoPinned(String taskId, bool pinned) async {
     var ids = List<String>.from(pinnedTodoIds);
@@ -93,5 +115,13 @@ class AppSettingsRepository extends ChangeNotifier {
     await _prefs.setStringList(_kPinnedTodoIds, ids);
     notifyListeners();
     return true;
+  }
+
+  String _voiceProvider(String key) {
+    return _normalizeVoiceProvider(_prefs.getString(key) ?? 'cloud');
+  }
+
+  String _normalizeVoiceProvider(String provider) {
+    return provider == 'local' ? 'local' : 'cloud';
   }
 }

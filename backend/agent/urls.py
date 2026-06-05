@@ -1,6 +1,7 @@
 from django.urls import path
 
 from . import views
+from . import audio_views
 
 urlpatterns = [
     path("sessions/", views.AgentSessionCreateView.as_view(), name="agent-session-create"),
@@ -39,5 +40,7 @@ urlpatterns = [
         views.UserLlmConfigTestView.as_view(),
         name="agent-llm-test",
     ),
+    path("asr/", audio_views.AgentAsrView.as_view(), name="agent-asr"),
+    path("tts/", audio_views.AgentTtsView.as_view(), name="agent-tts"),
 ]
 

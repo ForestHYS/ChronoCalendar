@@ -35,11 +35,22 @@ class UserLlmConfigInSerializer(serializers.Serializer):
     base_url = serializers.CharField(required=False, allow_blank=True, max_length=300)
     api_key = serializers.CharField(required=False, allow_blank=True, max_length=200)
     model_name = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    asr_model = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    tts_model = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    tts_voice = serializers.CharField(required=False, allow_blank=True, max_length=50)
 
 
 class UserLlmConfigOutSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserLlmConfig
-        fields = ["base_url", "api_key", "updated_at"]
+        fields = [
+            "base_url",
+            "api_key",
+            "model_name",
+            "asr_model",
+            "tts_model",
+            "tts_voice",
+            "updated_at",
+        ]
         read_only_fields = ["updated_at"]
 

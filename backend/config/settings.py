@@ -119,6 +119,8 @@ X_FRAME_OPTIONS = "DENY"
 AGENT_LLM_BASE_URL = os.environ.get("AGENT_LLM_BASE_URL", "")
 AGENT_LLM_API_KEY = os.environ.get("AGENT_LLM_API_KEY", "")
 AGENT_LLM_MODEL = os.environ.get("AGENT_LLM_MODEL", "gpt-5")
+AGENT_ASR_MODEL = os.environ.get("AGENT_ASR_MODEL", "gpt-4o-mini-transcribe")
+AGENT_TTS_MODEL = os.environ.get("AGENT_TTS_MODEL", "gpt-4o-mini-tts")
 
 AGENT_HISTORY_MAX_MESSAGES = int(os.environ.get("AGENT_HISTORY_MAX_MESSAGES", "16"))
 AGENT_HISTORY_SUMMARIZE_THRESHOLD = int(
