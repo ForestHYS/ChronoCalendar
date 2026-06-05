@@ -34,7 +34,7 @@ class AppSettingsRepository extends ChangeNotifier {
     _prefs.getStringList(_kHomeTodoShortcutIds) ?? const [],
   );
 
-  bool get agentAutoSpeak => _prefs.getBool(_kAgentAutoSpeak) ?? false;
+  bool get agentAutoSpeak => _prefs.getBool(_kAgentAutoSpeak) ?? true;
 
   String get agentAsrProvider => _voiceProvider(_kAgentAsrProvider);
 

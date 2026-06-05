@@ -63,9 +63,14 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   bool _loading = true;
   bool _listening = false;
   bool _voiceBusy = false;
+  bool _speechRunning = false;
+  int _speechGeneration = 0;
+  String? _speakingText;
 
   final List<_ChatItem> _items = [];
   List<Map<String, dynamic>> _rawMessages = [];
+  final List<_SpeechJob> _speechQueue = [];
+  final Set<String> _autoSpokenKeys = {};
 
   @override
   void initState() {
@@ -153,8 +158,8 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
   @override
   void dispose() {
+    unawaited(_stopSpeech());
     ref.read(speechRecognizerServiceProvider).cancel();
-    ref.read(speechSynthesizerServiceProvider).stop();
     _inputC.dispose();
     _scrollC.dispose();
     super.dispose();
@@ -169,6 +174,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
   Future<void> _toggleListening() async {
     if (_voiceBusy || _sending) return;
+    await _stopSpeech();
     final recognizer = ref.read(speechRecognizerServiceProvider);
     if (_listening) {
       setState(() => _voiceBusy = true);
@@ -228,19 +234,99 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   }
 
   Future<void> _speakText(String text) async {
+    final value = text.trim();
+    if (value.isEmpty) return;
+    if (_speechRunning && _speakingText == value) {
+      await _stopSpeech();
+      return;
+    }
+    await _stopSpeech();
+    await _playSpeech(value);
+  }
+
+  Future<void> _stopSpeech() async {
+    _speechGeneration++;
+    _speechQueue.clear();
+    if (mounted) {
+      setState(() {
+        _speechRunning = false;
+        _speakingText = null;
+      });
+    } else {
+      _speechRunning = false;
+      _speakingText = null;
+    }
+    try {
+      await ref.read(speechSynthesizerServiceProvider).stop();
+    } catch (_) {
+      // 页面切换或 provider 正在释放时，停止失败不需要打断交互。
+    }
+  }
+
+  Future<void> _playSpeech(String text) async {
+    final gen = ++_speechGeneration;
+    if (mounted) {
+      setState(() {
+        _speechRunning = true;
+        _speakingText = text;
+      });
+    } else {
+      _speechRunning = true;
+      _speakingText = text;
+    }
     try {
       await ref.read(speechSynthesizerServiceProvider).speak(text);
     } catch (e) {
+      if (gen == _speechGeneration) {
+        _speechQueue.clear();
+      }
       if (mounted) {
         await showAppErrorDialog(context, title: '语音播放失败', error: e);
+      }
+    } finally {
+      if (gen == _speechGeneration) {
+        if (mounted) {
+          setState(() {
+            _speechRunning = false;
+            _speakingText = null;
+          });
+        } else {
+          _speechRunning = false;
+          _speakingText = null;
+        }
       }
     }
   }
 
-  Future<void> _speakAssistantPayload(Map<String, dynamic> payload) async {
+  void _enqueueAutoSpeak(Map<String, dynamic> payload, String key) {
+    if (!ref.read(appSettingsRepositoryProvider).agentAutoSpeak) return;
+    if (!_autoSpokenKeys.add(key)) return;
     final text = _speakableText(payload);
     if (text == null || text.trim().isEmpty) return;
-    await _speakText(text);
+    _speechQueue.add(_SpeechJob(text.trim()));
+    unawaited(_runSpeechQueue());
+  }
+
+  String _speechKey(Map<String, dynamic> payload, String? messageId) {
+    final id = messageId?.trim();
+    if (id != null && id.isNotEmpty) return id;
+    final type = payload['type'] ?? '';
+    final text =
+        _speakableText(payload) ??
+        (payload['message'] as String?) ??
+        (payload['text'] as String?) ??
+        '';
+    return '$type:${text.hashCode}:${payload.hashCode}';
+  }
+
+  Future<void> _runSpeechQueue() async {
+    if (_speechRunning) return;
+    while (mounted &&
+        ref.read(appSettingsRepositoryProvider).agentAutoSpeak &&
+        _speechQueue.isNotEmpty) {
+      final job = _speechQueue.removeAt(0);
+      await _playSpeech(job.text);
+    }
   }
 
   String? _speakableText(Map<String, dynamic> payload) {
@@ -249,7 +335,8 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
       return payload['text'] as String?;
     }
     if (type == 'open_editor') {
-      final message = payload['message'] as String?;
+      final message =
+          (payload['message'] as String?) ?? (payload['text'] as String?);
       final draft = payload['task_draft'];
       if (message != null && message.trim().isNotEmpty) return message;
       if (draft is Map<String, dynamic>) {
@@ -300,9 +387,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
         ref.read(taskRepositoryProvider).refreshTasks();
       }
       _scrollToBottom();
-      if (ref.read(appSettingsRepositoryProvider).agentAutoSpeak) {
-        await _speakAssistantPayload(resp);
-      }
+      _enqueueAutoSpeak(resp, _speechKey(resp, assistantId));
     } catch (e) {
       if (mounted) await showAppErrorDialog(context, title: '发送失败', error: e);
     } finally {
@@ -364,6 +449,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
         ref.read(taskRepositoryProvider).refreshTasks();
       }
       _scrollToBottom();
+      _enqueueAutoSpeak(resp, _speechKey(resp, assistantId));
     } catch (e) {
       if (mounted) await showAppErrorDialog(context, title: '发送失败', error: e);
     } finally {
@@ -403,6 +489,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     if (ok != true || !mounted) return;
     // 创建新会话
     try {
+      await _stopSpeech();
       final id = await ref.read(agentRepositoryProvider).createSession();
       await _sessionStore.clearForUser(_userEmail);
       await _sessionStore.setLastSessionId(_userEmail, id);
@@ -425,7 +512,10 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
         title: const Text('AI 助手'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+          onPressed: () {
+            unawaited(_stopSpeech());
+            context.pop();
+          },
         ),
         actions: [
           IconButton(
@@ -435,9 +525,13 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                   : Icons.volume_off_outlined,
             ),
             tooltip: appSettings.agentAutoSpeak ? '关闭自动朗读' : '开启自动朗读',
-            onPressed: () => ref
-                .read(appSettingsRepositoryProvider)
-                .setAgentAutoSpeak(!appSettings.agentAutoSpeak),
+            onPressed: () async {
+              final next = !appSettings.agentAutoSpeak;
+              if (!next) await _stopSpeech();
+              await ref
+                  .read(appSettingsRepositoryProvider)
+                  .setAgentAutoSpeak(next);
+            },
           ),
           IconButton(
             icon: const Icon(Icons.add),
@@ -565,10 +659,14 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     _rawMessages.add({'role': 'assistant', 'content_json': payload});
     unawaited(_persistCache());
     _scrollToBottom();
-    if (ref.read(appSettingsRepositoryProvider).agentAutoSpeak) {
-      unawaited(_speakAssistantPayload(payload));
-    }
+    _enqueueAutoSpeak(payload, _speechKey(payload, null));
   }
+}
+
+class _SpeechJob {
+  const _SpeechJob(this.text);
+
+  final String text;
 }
 
 class _ChatItem {
