@@ -5,6 +5,7 @@ const _kAutoDeleteCompletedHours = 'auto_delete_completed_hours';
 const _kAutoDeleteOverdueHours = 'auto_delete_overdue_hours';
 const _kPinnedTodoIds = 'pinned_todo_ids';
 const _kHomeTodoShortcutIds = 'home_todo_shortcut_ids';
+const _kAgentAutoSpeak = 'agent_auto_speak';
 
 /// 应用级本地偏好（非番茄钟）。
 class AppSettingsRepository extends ChangeNotifier {
@@ -27,8 +28,11 @@ class AppSettingsRepository extends ChangeNotifier {
       List.unmodifiable(_prefs.getStringList(_kPinnedTodoIds) ?? const []);
 
   /// 主页 Todo 快捷栏展示顺序（最多 [homeShortcutTodoLimit] 个 id）。
-  List<String> get homeTodoShortcutIds =>
-      List.unmodifiable(_prefs.getStringList(_kHomeTodoShortcutIds) ?? const []);
+  List<String> get homeTodoShortcutIds => List.unmodifiable(
+    _prefs.getStringList(_kHomeTodoShortcutIds) ?? const [],
+  );
+
+  bool get agentAutoSpeak => _prefs.getBool(_kAgentAutoSpeak) ?? false;
 
   bool isTodoPinned(String id) => pinnedTodoIds.contains(id);
 
@@ -68,6 +72,11 @@ class AppSettingsRepository extends ChangeNotifier {
       _kHomeTodoShortcutIds,
       ids.take(homeShortcutTodoLimit).toList(),
     );
+    notifyListeners();
+  }
+
+  Future<void> setAgentAutoSpeak(bool enabled) async {
+    await _prefs.setBool(_kAgentAutoSpeak, enabled);
     notifyListeners();
   }
 

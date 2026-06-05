@@ -5,6 +5,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/api/api_client.dart';
 import '../core/notifications/notification_service.dart';
 import '../core/notifications/reminder_scheduler.dart';
+import '../core/voice/speech_recognizer_service.dart';
+import '../core/voice/speech_synthesizer_service.dart';
+import '../core/voice/system_speech_recognizer_service.dart';
+import '../core/voice/system_speech_synthesizer_service.dart';
 import 'app_settings_repository.dart';
 import 'ai_settings_repository.dart';
 import 'auth_repository.dart';
@@ -21,16 +25,22 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 });
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
-  return AuthRepository(ref.watch(sharedPreferencesProvider), ref.watch(apiClientProvider));
+  return AuthRepository(
+    ref.watch(sharedPreferencesProvider),
+    ref.watch(apiClientProvider),
+  );
 });
 
-final pomodoroSettingsRepositoryProvider = Provider<PomodoroSettingsRepository>((ref) {
-  return PomodoroSettingsRepository(ref.watch(sharedPreferencesProvider));
-});
+final pomodoroSettingsRepositoryProvider = Provider<PomodoroSettingsRepository>(
+  (ref) {
+    return PomodoroSettingsRepository(ref.watch(sharedPreferencesProvider));
+  },
+);
 
-final appSettingsRepositoryProvider = ChangeNotifierProvider<AppSettingsRepository>((ref) {
-  return AppSettingsRepository(ref.watch(sharedPreferencesProvider));
-});
+final appSettingsRepositoryProvider =
+    ChangeNotifierProvider<AppSettingsRepository>((ref) {
+      return AppSettingsRepository(ref.watch(sharedPreferencesProvider));
+    });
 
 final taskRepositoryProvider = ChangeNotifierProvider<TaskRepository>((ref) {
   return TaskRepository(ref.watch(apiClientProvider));
@@ -42,6 +52,22 @@ final agentRepositoryProvider = Provider<AgentRepository>((ref) {
 
 final aiSettingsRepositoryProvider = Provider<AiSettingsRepository>((ref) {
   return AiSettingsRepository(ref.watch(apiClientProvider));
+});
+
+final speechRecognizerServiceProvider = Provider<SpeechRecognizerService>((
+  ref,
+) {
+  final service = SystemSpeechRecognizerService();
+  ref.onDispose(service.cancel);
+  return service;
+});
+
+final speechSynthesizerServiceProvider = Provider<SpeechSynthesizerService>((
+  ref,
+) {
+  final service = SystemSpeechSynthesizerService();
+  ref.onDispose(service.stop);
+  return service;
 });
 
 /// 全局唯一的提醒调度器。由 [CalendarApp] 在登录态变化时 start/stop。
@@ -141,7 +167,10 @@ class AuthNotifier extends ChangeNotifier {
     await _repo.updateNickname(nickname);
   }
 
-  Future<void> changePassword({required String current, required String next}) async {
+  Future<void> changePassword({
+    required String current,
+    required String next,
+  }) async {
     await _repo.changePassword(current: current, next: next);
   }
 }

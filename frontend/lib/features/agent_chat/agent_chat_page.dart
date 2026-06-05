@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -21,6 +23,8 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   String? _sessionId;
   bool _sending = false;
   bool _loading = true;
+  bool _listening = false;
+  bool _voiceBusy = false;
 
   final List<_ChatItem> _items = [];
 
@@ -91,6 +95,8 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
   @override
   void dispose() {
+    ref.read(speechRecognizerServiceProvider).cancel();
+    ref.read(speechSynthesizerServiceProvider).stop();
     _inputC.dispose();
     _scrollC.dispose();
     super.dispose();
@@ -100,6 +106,110 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     if (_sessionId != null) return;
     final id = await ref.read(agentRepositoryProvider).createSession();
     _sessionId = id;
+  }
+
+  Future<void> _toggleListening() async {
+    if (_voiceBusy || _sending) return;
+    final recognizer = ref.read(speechRecognizerServiceProvider);
+    if (_listening) {
+      setState(() => _voiceBusy = true);
+      try {
+        await recognizer.stop();
+      } finally {
+        if (mounted) {
+          setState(() {
+            _listening = false;
+            _voiceBusy = false;
+          });
+        }
+      }
+      return;
+    }
+
+    setState(() => _voiceBusy = true);
+    try {
+      final started = await recognizer.listen(
+        localeId: 'zh_CN',
+        onResult: (text, _) {
+          if (!mounted) return;
+          setState(() {
+            _inputC.text = text;
+            _inputC.selection = TextSelection.collapsed(offset: text.length);
+          });
+        },
+        onDone: () {
+          if (mounted) setState(() => _listening = false);
+        },
+        onError: (error) {
+          if (!mounted) return;
+          setState(() => _listening = false);
+          unawaited(showAppErrorDialog(context, title: '语音识别失败', error: error));
+        },
+      );
+      if (!mounted) return;
+      setState(() {
+        _listening = started;
+        _voiceBusy = false;
+      });
+      if (!started) {
+        await showAppErrorDialog(
+          context,
+          title: '语音识别不可用',
+          error: StateError('当前设备没有可用的系统语音识别服务'),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _listening = false;
+        _voiceBusy = false;
+      });
+      await showAppErrorDialog(context, title: '语音识别失败', error: e);
+    }
+  }
+
+  Future<void> _speakText(String text) async {
+    try {
+      await ref.read(speechSynthesizerServiceProvider).speak(text);
+    } catch (e) {
+      if (mounted) {
+        await showAppErrorDialog(context, title: '语音播放失败', error: e);
+      }
+    }
+  }
+
+  Future<void> _speakAssistantPayload(Map<String, dynamic> payload) async {
+    final text = _speakableText(payload);
+    if (text == null || text.trim().isEmpty) return;
+    await _speakText(text);
+  }
+
+  String? _speakableText(Map<String, dynamic> payload) {
+    final type = payload['type'];
+    if (type == 'message' || type == 'query_result') {
+      return payload['text'] as String?;
+    }
+    if (type == 'open_editor') {
+      final message = payload['message'] as String?;
+      final draft = payload['task_draft'];
+      if (message != null && message.trim().isNotEmpty) return message;
+      if (draft is Map<String, dynamic>) {
+        final title = draft['title'] as String?;
+        if (title != null && title.trim().isNotEmpty) {
+          return '已为你生成任务草稿：$title';
+        }
+      }
+      return '已为你生成任务草稿';
+    }
+    if (type == 'approval_required') {
+      return payload['summary'] as String? ?? '这个操作需要你的确认';
+    }
+    if (type == 'plan_questions' ||
+        type == 'plan_outline' ||
+        type == 'plan_preview') {
+      return payload['message'] as String?;
+    }
+    return payload['text'] as String?;
   }
 
   Future<void> _sendInteraction({
@@ -113,7 +223,9 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     });
     try {
       await _ensureSession();
-      final sent = await ref.read(agentRepositoryProvider).sendMessage(
+      final sent = await ref
+          .read(agentRepositoryProvider)
+          .sendMessage(
             sessionId: _sessionId!,
             text: userLabel,
             clientContext: buildAgentClientContext(),
@@ -132,6 +244,9 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
         ref.read(taskRepositoryProvider).refreshTasks();
       }
       _scrollToBottom();
+      if (ref.read(appSettingsRepositoryProvider).agentAutoSpeak) {
+        await _speakAssistantPayload(resp);
+      }
     } catch (e) {
       if (mounted) await showAppErrorDialog(context, title: '发送失败', error: e);
     } finally {
@@ -165,7 +280,9 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     });
     try {
       await _ensureSession();
-      final sent = await ref.read(agentRepositoryProvider).sendMessage(
+      final sent = await ref
+          .read(agentRepositoryProvider)
+          .sendMessage(
             sessionId: _sessionId!,
             text: text,
             clientContext: buildAgentClientContext(),
@@ -235,6 +352,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
   @override
   Widget build(BuildContext context) {
+    final appSettings = ref.watch(appSettingsRepositoryProvider);
     return Scaffold(
       backgroundColor: AppColors.surface,
       appBar: AppBar(
@@ -244,6 +362,17 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
           onPressed: () => context.pop(),
         ),
         actions: [
+          IconButton(
+            icon: Icon(
+              appSettings.agentAutoSpeak
+                  ? Icons.volume_up_outlined
+                  : Icons.volume_off_outlined,
+            ),
+            tooltip: appSettings.agentAutoSpeak ? '关闭自动朗读' : '开启自动朗读',
+            onPressed: () => ref
+                .read(appSettingsRepositoryProvider)
+                .setAgentAutoSpeak(!appSettings.agentAutoSpeak),
+          ),
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: '新对话',
@@ -285,11 +414,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                             initialSubmitted: it.initialSubmitted,
                             onOpenEditor: _openEditorFromDraft,
                             onFollowUp: _appendAssistantPayload,
+                            onSpeak: _speakText,
                             onPlanConfirmed: (messageId) {
-                              _markAssistantPayload(
-                                messageId,
-                                {'plan_confirmed': true},
-                              );
+                              _markAssistantPayload(messageId, {
+                                'plan_confirmed': true,
+                              });
                             },
                             onPlanInteractionDone: _markAssistantPayload,
                             onSendInteraction: _sendInteraction,
@@ -315,6 +444,28 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                       decoration: const InputDecoration(
                         hintText: '输入：创建任务 / 查询明天任务 ...',
                       ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  SizedBox(
+                    width: 48,
+                    height: 48,
+                    child: IconButton.filledTonal(
+                      tooltip: _listening ? '停止语音输入' : '语音输入',
+                      onPressed: (_sending || _voiceBusy)
+                          ? null
+                          : _toggleListening,
+                      icon: _voiceBusy
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Icon(
+                              _listening
+                                  ? Icons.stop_circle_outlined
+                                  : Icons.mic_none_outlined,
+                            ),
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -346,6 +497,9 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
       _items.add(_ChatItem.assistant(payload));
     });
     _scrollToBottom();
+    if (ref.read(appSettingsRepositoryProvider).agentAutoSpeak) {
+      unawaited(_speakAssistantPayload(payload));
+    }
   }
 }
 
@@ -404,6 +558,7 @@ class _AssistantCard extends ConsumerStatefulWidget {
     required this.onOpenEditor,
     required this.onFollowUp,
     required this.onSendInteraction,
+    required this.onSpeak,
     this.messageId,
     this.initialSubmitted = false,
     this.onPlanConfirmed,
@@ -413,13 +568,15 @@ class _AssistantCard extends ConsumerStatefulWidget {
   final String? messageId;
   final void Function(Map<String, dynamic> draft) onOpenEditor;
   final void Function(Map<String, dynamic> payload) onFollowUp;
+  final Future<void> Function(String text) onSpeak;
   final Future<void> Function({
     required String userLabel,
     required Map<String, dynamic> interaction,
-  }) onSendInteraction;
+  })
+  onSendInteraction;
   final void Function(String messageId)? onPlanConfirmed;
   final void Function(String messageId, Map<String, dynamic> patch)?
-      onPlanInteractionDone;
+  onPlanInteractionDone;
   final bool initialSubmitted;
 
   @override
@@ -516,6 +673,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
         return _AgentTaskListCard(
           text: text,
           items: items,
+          onSpeak: widget.onSpeak,
         );
       }
       return _assistantTextCard(text);
@@ -628,7 +786,11 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
     if (type == 'query_result') {
       final text = payload['text'] as String? ?? '查询结果如下：';
       final items = payload['items'];
-      return _AgentTaskListCard(text: text, items: items);
+      return _AgentTaskListCard(
+        text: text,
+        items: items,
+        onSpeak: widget.onSpeak,
+      );
     }
 
     if (type == 'plan_questions') {
@@ -679,7 +841,24 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 340),
       child: Card(
-        child: Padding(padding: const EdgeInsets.all(14), child: Text(text)),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: Text(text)),
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: '朗读',
+                visualDensity: VisualDensity.compact,
+                onPressed: text.trim().isEmpty
+                    ? null
+                    : () => widget.onSpeak(text),
+                icon: const Icon(Icons.volume_up_outlined),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -718,10 +897,12 @@ class _AgentTaskListCard extends ConsumerWidget {
   const _AgentTaskListCard({
     required this.text,
     required this.items,
+    required this.onSpeak,
   });
 
   final String text;
   final dynamic items;
+  final Future<void> Function(String text) onSpeak;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -737,7 +918,19 @@ class _AgentTaskListCard extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(text),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: Text(text)),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    tooltip: '朗读',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: text.trim().isEmpty ? null : () => onSpeak(text),
+                    icon: const Icon(Icons.volume_up_outlined),
+                  ),
+                ],
+              ),
               const SizedBox(height: 10),
               if (list.isNotEmpty) ...[
                 ...list.take(12).map((e) => _AgentTaskListRow(item: e)),
@@ -868,7 +1061,8 @@ class _PlanQuestionsCard extends StatefulWidget {
   final Future<void> Function({
     required String userLabel,
     required Map<String, dynamic> interaction,
-  }) onSendInteraction;
+  })
+  onSendInteraction;
   final void Function(Map<String, dynamic> payload)? onFollowUp;
   final void Function(String messageId, Map<String, dynamic> patch)? onDone;
 
@@ -890,8 +1084,7 @@ class _PlanQuestionsCardState extends State<_PlanQuestionsCard> {
         ? qs.whereType<Map<String, dynamic>>().toList()
         : <Map<String, dynamic>>[];
     _submitted =
-        widget.initialSubmitted ||
-        widget.payload['plan_answered'] == true;
+        widget.initialSubmitted || widget.payload['plan_answered'] == true;
   }
 
   bool get _allAnswered {
@@ -947,8 +1140,7 @@ class _PlanQuestionsCardState extends State<_PlanQuestionsCard> {
           'type': 'plan_answers',
           'source_message_id': widget.messageId,
           'answers': Map<String, dynamic>.from(_answers),
-          if (planContext is Map<String, dynamic>)
-            'plan_context': planContext,
+          if (planContext is Map<String, dynamic>) 'plan_context': planContext,
         },
       );
       if (!mounted) return;
@@ -1074,7 +1266,8 @@ class _PlanOutlineCard extends StatefulWidget {
   final Future<void> Function({
     required String userLabel,
     required Map<String, dynamic> interaction,
-  }) onSendInteraction;
+  })
+  onSendInteraction;
   final void Function(Map<String, dynamic> payload)? onFollowUp;
   final void Function(String messageId, Map<String, dynamic> patch)? onDone;
 
@@ -1090,8 +1283,7 @@ class _PlanOutlineCardState extends State<_PlanOutlineCard> {
   void initState() {
     super.initState();
     _submitted =
-        widget.initialSubmitted ||
-        widget.payload['outline_confirmed'] == true;
+        widget.initialSubmitted || widget.payload['outline_confirmed'] == true;
   }
 
   Future<void> _confirm() async {
@@ -1104,8 +1296,7 @@ class _PlanOutlineCardState extends State<_PlanOutlineCard> {
         interaction: {
           'type': 'confirm_outline',
           'source_message_id': widget.messageId,
-          if (planContext is Map<String, dynamic>)
-            'plan_context': planContext,
+          if (planContext is Map<String, dynamic>) 'plan_context': planContext,
         },
       );
       if (!mounted) return;
@@ -1132,8 +1323,9 @@ class _PlanOutlineCardState extends State<_PlanOutlineCard> {
         ? phases.whereType<Map<String, dynamic>>().toList()
         : <Map<String, dynamic>>[];
     final summary = widget.payload['planned_schedule_summary'];
-    final summaryMap =
-        summary is Map<String, dynamic> ? summary : <String, dynamic>{};
+    final summaryMap = summary is Map<String, dynamic>
+        ? summary
+        : <String, dynamic>{};
     final todoN = summaryMap['todo_count'];
     final blockN = summaryMap['block_count'];
 
@@ -1302,7 +1494,9 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
     final selectedTasks = _selected.map((i) => _taskList[i]).toList();
     setState(() => _creating = true);
     try {
-      final r = await ref.read(agentRepositoryProvider).confirmPlan(
+      final r = await ref
+          .read(agentRepositoryProvider)
+          .confirmPlan(
             selectedTasks,
             clientContext: buildAgentClientContext(),
             sourceMessageId: widget.messageId,
@@ -1392,15 +1586,16 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
                   child: ListView.separated(
                     shrinkWrap: true,
                     itemCount: _taskList.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 4),
+                    separatorBuilder: (_, index) => const SizedBox(height: 4),
                     itemBuilder: (context, index) {
                       final t = _taskList[index];
                       final title = t['title'] as String? ?? '';
                       final typ = t['type'] as String?;
                       final typeLabel = _planTaskTypeLabel(typ);
                       final subtasks = t['subtasks'];
-                      final subtaskCount =
-                          (subtasks is List) ? subtasks.length : 0;
+                      final subtaskCount = (subtasks is List)
+                          ? subtasks.length
+                          : 0;
                       final timeLabel = _planTaskTimeLabel(t);
                       final checked = _selected.contains(index);
                       final meta = [
@@ -1478,7 +1673,8 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
                 )
               else
                 FilledButton(
-                  onPressed: _taskList.isEmpty || selectedCount == 0 || _creating
+                  onPressed:
+                      _taskList.isEmpty || selectedCount == 0 || _creating
                       ? null
                       : _confirmSelected,
                   child: _creating
