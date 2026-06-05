@@ -35,7 +35,11 @@ class UserLlmConfigInSerializer(serializers.Serializer):
     base_url = serializers.CharField(required=False, allow_blank=True, max_length=300)
     api_key = serializers.CharField(required=False, allow_blank=True, max_length=200)
     model_name = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    asr_base_url = serializers.CharField(required=False, allow_blank=True, max_length=300)
+    asr_api_key = serializers.CharField(required=False, allow_blank=True, max_length=200)
     asr_model = serializers.CharField(required=False, allow_blank=True, max_length=100)
+    tts_base_url = serializers.CharField(required=False, allow_blank=True, max_length=300)
+    tts_api_key = serializers.CharField(required=False, allow_blank=True, max_length=200)
     tts_model = serializers.CharField(required=False, allow_blank=True, max_length=100)
     tts_voice = serializers.CharField(required=False, allow_blank=True, max_length=50)
 
@@ -47,7 +51,11 @@ class UserLlmConfigOutSerializer(serializers.ModelSerializer):
             "base_url",
             "api_key",
             "model_name",
+            "asr_base_url",
+            "asr_api_key",
             "asr_model",
+            "tts_base_url",
+            "tts_api_key",
             "tts_model",
             "tts_voice",
             "updated_at",

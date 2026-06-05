@@ -266,25 +266,38 @@ class UserLlmConfigView(APIView):
 
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        cfg = UserLlmConfig.objects.filter(user=request.user).first()
+    def _payload(self, cfg):
+        default_asr_model = getattr(settings, "AGENT_ASR_MODEL", "gpt-4o-mini-transcribe")
+        default_tts_model = getattr(settings, "AGENT_TTS_MODEL", "gpt-4o-mini-tts")
         if not cfg:
-            return ok({
+            return {
                 "base_url": "",
                 "has_api_key": False,
                 "model_name": "",
-                "asr_model": getattr(settings, "AGENT_ASR_MODEL", "gpt-4o-mini-transcribe"),
-                "tts_model": getattr(settings, "AGENT_TTS_MODEL", "gpt-4o-mini-tts"),
+                "asr_base_url": "",
+                "has_asr_api_key": False,
+                "asr_model": default_asr_model,
+                "tts_base_url": "",
+                "has_tts_api_key": False,
+                "tts_model": default_tts_model,
                 "tts_voice": "alloy",
-            })
-        return ok({
+            }
+        return {
             "base_url": cfg.base_url,
             "has_api_key": bool(cfg.api_key),
             "model_name": cfg.model_name,
-            "asr_model": cfg.asr_model or getattr(settings, "AGENT_ASR_MODEL", "gpt-4o-mini-transcribe"),
-            "tts_model": cfg.tts_model or getattr(settings, "AGENT_TTS_MODEL", "gpt-4o-mini-tts"),
+            "asr_base_url": cfg.asr_base_url,
+            "has_asr_api_key": bool(cfg.asr_api_key),
+            "asr_model": cfg.asr_model or default_asr_model,
+            "tts_base_url": cfg.tts_base_url,
+            "has_tts_api_key": bool(cfg.tts_api_key),
+            "tts_model": cfg.tts_model or default_tts_model,
             "tts_voice": cfg.tts_voice or "alloy",
-        })
+        }
+
+    def get(self, request):
+        cfg = UserLlmConfig.objects.filter(user=request.user).first()
+        return ok(self._payload(cfg))
 
     def patch(self, request):
         s = UserLlmConfigInSerializer(data=request.data)
@@ -305,9 +318,23 @@ class UserLlmConfigView(APIView):
         if "model_name" in data:
             cfg.model_name = (data.get("model_name") or "").strip()
             update_fields.append("model_name")
+        if "asr_base_url" in data:
+            raw = (data.get("asr_base_url") or "").strip()
+            cfg.asr_base_url = raw.rstrip("/") if raw else ""
+            update_fields.append("asr_base_url")
+        if "asr_api_key" in data:
+            cfg.asr_api_key = (data.get("asr_api_key") or "").strip()
+            update_fields.append("asr_api_key")
         if "asr_model" in data:
             cfg.asr_model = (data.get("asr_model") or "").strip()
             update_fields.append("asr_model")
+        if "tts_base_url" in data:
+            raw = (data.get("tts_base_url") or "").strip()
+            cfg.tts_base_url = raw.rstrip("/") if raw else ""
+            update_fields.append("tts_base_url")
+        if "tts_api_key" in data:
+            cfg.tts_api_key = (data.get("tts_api_key") or "").strip()
+            update_fields.append("tts_api_key")
         if "tts_model" in data:
             cfg.tts_model = (data.get("tts_model") or "").strip()
             update_fields.append("tts_model")
@@ -318,14 +345,7 @@ class UserLlmConfigView(APIView):
         if update_fields:
             cfg.save(update_fields=update_fields + ["updated_at"])
 
-        return ok({
-            "base_url": cfg.base_url,
-            "has_api_key": bool(cfg.api_key),
-            "model_name": cfg.model_name,
-            "asr_model": cfg.asr_model or getattr(settings, "AGENT_ASR_MODEL", "gpt-4o-mini-transcribe"),
-            "tts_model": cfg.tts_model or getattr(settings, "AGENT_TTS_MODEL", "gpt-4o-mini-tts"),
-            "tts_voice": cfg.tts_voice or "alloy",
-        })
+        return ok(self._payload(cfg))
 
 
 class UserLlmConfigTestView(APIView):

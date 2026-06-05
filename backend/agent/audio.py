@@ -35,19 +35,11 @@ class AudioResult:
 
 
 def _asr_model(user_id: str) -> str:
-    return _voice_config_value(
-        user_id,
-        "asr_model",
-        getattr(settings, "AGENT_ASR_MODEL", "") or DEFAULT_ASR_MODEL,
-    )
+    return _voice_config_value(user_id, "asr_model", _default_asr_model())
 
 
 def _tts_model(user_id: str) -> str:
-    return _voice_config_value(
-        user_id,
-        "tts_model",
-        getattr(settings, "AGENT_TTS_MODEL", "") or DEFAULT_TTS_MODEL,
-    )
+    return _voice_config_value(user_id, "tts_model", _default_tts_model())
 
 
 def _tts_voice(user_id: str, requested: str) -> str:
@@ -68,8 +60,39 @@ def _voice_config_value(user_id: str, field: str, default: str) -> str:
     return (default or "").strip()
 
 
-def _client_for_user(user_id: str) -> tuple[Optional[OpenAI], Optional[str], Optional[str]]:
-    api_key, base_url, _ = _load_llm_config(user_id)
+def _default_asr_model() -> str:
+    return getattr(settings, "AGENT_ASR_MODEL", "") or DEFAULT_ASR_MODEL
+
+
+def _default_tts_model() -> str:
+    return getattr(settings, "AGENT_TTS_MODEL", "") or DEFAULT_TTS_MODEL
+
+
+def _voice_credentials(user_id: str, kind: str) -> tuple[str, Optional[str]]:
+    fallback_key, fallback_base_url, _ = _load_llm_config(user_id)
+    try:
+        from .models import UserLlmConfig
+
+        cfg = UserLlmConfig.objects.filter(user_id=user_id).first()
+    except Exception:
+        cfg = None
+
+    if cfg is None:
+        return fallback_key, fallback_base_url
+
+    api_key = (getattr(cfg, f"{kind}_api_key", "") or "").strip()
+    base_url_raw = (getattr(cfg, f"{kind}_base_url", "") or "").strip()
+    return (
+        api_key,
+        base_url_raw.rstrip("/") if base_url_raw else None,
+    )
+
+
+def _client_for_user(
+    user_id: str,
+    kind: str,
+) -> tuple[Optional[OpenAI], Optional[str], Optional[str]]:
+    api_key, base_url = _voice_credentials(user_id, kind)
     if not api_key:
         return None, None, "missing_api_key"
     try:
@@ -105,7 +128,7 @@ def transcribe_with_audio_model(
     if len(raw) > MAX_AUDIO_BYTES:
         return AudioResult(ok=False, data=None, error="audio_too_large")
 
-    client, base_url, err = _client_for_user(user_id)
+    client, base_url, err = _client_for_user(user_id, "asr")
     if err:
         return AudioResult(ok=False, data=None, error=err)
 
@@ -158,7 +181,7 @@ def synthesize_with_audio_model(
     if audio_format not in SUPPORTED_OUTPUT_FORMATS:
         return AudioResult(ok=False, data=None, error="unsupported_format")
 
-    client, base_url, err = _client_for_user(user_id)
+    client, base_url, err = _client_for_user(user_id, "tts")
     if err:
         return AudioResult(ok=False, data=None, error=err)
 

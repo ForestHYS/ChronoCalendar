@@ -118,7 +118,7 @@ class AppSettingsRepository extends ChangeNotifier {
   }
 
   String _voiceProvider(String key) {
-    return _normalizeVoiceProvider(_prefs.getString(key) ?? 'cloud');
+    return _normalizeVoiceProvider(_prefs.getString(key) ?? 'local');
   }
 
   String _normalizeVoiceProvider(String provider) {
