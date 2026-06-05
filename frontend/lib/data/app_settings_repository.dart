@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,12 +10,14 @@ const _kHomeTodoShortcutIds = 'home_todo_shortcut_ids';
 const _kAgentAutoSpeak = 'agent_auto_speak';
 const _kAgentAsrProvider = 'agent_asr_provider';
 const _kAgentTtsProvider = 'agent_tts_provider';
+const _kAgentVoiceProviderMigratedPrefix = 'agent_voice_provider_migrated';
 
 /// 应用级本地偏好（非番茄钟）。
 class AppSettingsRepository extends ChangeNotifier {
   AppSettingsRepository(this._prefs);
 
   final SharedPreferences _prefs;
+  String? _currentUserKey;
 
   static const maxPinnedTodos = 3;
   static const homeShortcutTodoLimit = 3;
@@ -39,6 +43,14 @@ class AppSettingsRepository extends ChangeNotifier {
   String get agentAsrProvider => _voiceProvider(_kAgentAsrProvider);
 
   String get agentTtsProvider => _voiceProvider(_kAgentTtsProvider);
+
+  void setCurrentUserEmail(String? email) {
+    final next = _normalizeUserKey(email);
+    if (_currentUserKey == next) return;
+    _currentUserKey = next;
+    _migrateLegacyVoiceProviderForCurrentUser();
+    notifyListeners();
+  }
 
   bool isTodoPinned(String id) => pinnedTodoIds.contains(id);
 
@@ -88,7 +100,7 @@ class AppSettingsRepository extends ChangeNotifier {
 
   Future<void> setAgentAsrProvider(String provider) async {
     await _prefs.setString(
-      _kAgentAsrProvider,
+      _scopedVoiceProviderKey(_kAgentAsrProvider),
       _normalizeVoiceProvider(provider),
     );
     notifyListeners();
@@ -96,7 +108,7 @@ class AppSettingsRepository extends ChangeNotifier {
 
   Future<void> setAgentTtsProvider(String provider) async {
     await _prefs.setString(
-      _kAgentTtsProvider,
+      _scopedVoiceProviderKey(_kAgentTtsProvider),
       _normalizeVoiceProvider(provider),
     );
     notifyListeners();
@@ -118,10 +130,41 @@ class AppSettingsRepository extends ChangeNotifier {
   }
 
   String _voiceProvider(String key) {
-    return _normalizeVoiceProvider(_prefs.getString(key) ?? 'local');
+    return _normalizeVoiceProvider(
+      _prefs.getString(_scopedVoiceProviderKey(key)) ?? 'local',
+    );
   }
 
   String _normalizeVoiceProvider(String provider) {
     return provider == 'local' ? 'local' : 'cloud';
+  }
+
+  String _scopedVoiceProviderKey(String key) {
+    final userKey = _currentUserKey;
+    if (userKey == null || userKey.isEmpty) return key;
+    return '$key:$userKey';
+  }
+
+  String? _normalizeUserKey(String? email) {
+    final value = email?.trim().toLowerCase();
+    if (value == null || value.isEmpty) return null;
+    return value;
+  }
+
+  void _migrateLegacyVoiceProviderForCurrentUser() {
+    final userKey = _currentUserKey;
+    if (userKey == null || userKey.isEmpty) return;
+    final migratedKey = '$_kAgentVoiceProviderMigratedPrefix:$userKey';
+    if (_prefs.getBool(migratedKey) == true) return;
+
+    for (final key in const [_kAgentAsrProvider, _kAgentTtsProvider]) {
+      final scopedKey = _scopedVoiceProviderKey(key);
+      if (_prefs.containsKey(scopedKey)) continue;
+      final legacy = _prefs.getString(key);
+      if (legacy != null) {
+        unawaited(_prefs.setString(scopedKey, _normalizeVoiceProvider(legacy)));
+      }
+    }
+    unawaited(_prefs.setBool(migratedKey, true));
   }
 }

@@ -114,7 +114,13 @@ final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
 });
 
 class AuthNotifier extends ChangeNotifier {
-  AuthNotifier(this._repo, this._taskRepo, this._appSettings, this._agentStore) {
+  AuthNotifier(
+    this._repo,
+    this._taskRepo,
+    this._appSettings,
+    this._agentStore,
+  ) {
+    _appSettings.setCurrentUserEmail(_repo.savedEmail);
     _sync();
   }
 
@@ -132,6 +138,7 @@ class AuthNotifier extends ChangeNotifier {
 
   Future<void> login(String email, String password) async {
     await _repo.login(email, password);
+    _appSettings.setCurrentUserEmail(_repo.savedEmail);
     _sync();
     notifyListeners();
     try {
@@ -145,6 +152,7 @@ class AuthNotifier extends ChangeNotifier {
     } catch (e) {
       _taskRepo.clearLocalCache();
       await _repo.logout();
+      _appSettings.setCurrentUserEmail(null);
       _sync();
       notifyListeners();
       rethrow;
@@ -157,6 +165,7 @@ class AuthNotifier extends ChangeNotifier {
     String? name,
   }) async {
     await _repo.register(email: email, password: password, name: name);
+    _appSettings.setCurrentUserEmail(_repo.savedEmail);
     _sync();
     notifyListeners();
     try {
@@ -170,6 +179,7 @@ class AuthNotifier extends ChangeNotifier {
     } catch (e) {
       _taskRepo.clearLocalCache();
       await _repo.logout();
+      _appSettings.setCurrentUserEmail(null);
       _sync();
       notifyListeners();
       rethrow;
@@ -181,6 +191,7 @@ class AuthNotifier extends ChangeNotifier {
     _taskRepo.clearLocalCache();
     await _agentStore.clearForUser(email);
     await _repo.logout();
+    _appSettings.setCurrentUserEmail(null);
     _sync();
     notifyListeners();
   }
