@@ -1,5 +1,7 @@
 import '../core/api/api_client.dart';
 
+const _defaultAgentBaseUrl = 'https://api.deepseek.com/';
+const _defaultAgentModel = 'deepseek-v4-flash';
 const _defaultAsrModel = 'qwen3-asr-flash';
 const _defaultTtsModel = 'qwen3-tts-flash';
 const _defaultTtsVoice = 'Cherry';
@@ -38,9 +40,9 @@ class AiSettingsRepository {
   Future<AiSettings> fetch() async {
     final data = await _api.request('GET', 'agent/llm-config/', auth: true);
     if (data is Map<String, dynamic>) {
-      final baseUrl = data['base_url'] as String? ?? '';
+      final baseUrl = data['base_url'] as String? ?? _defaultAgentBaseUrl;
       final hasApiKey = data['has_api_key'] == true;
-      final modelName = data['model_name'] as String? ?? '';
+      final modelName = data['model_name'] as String? ?? _defaultAgentModel;
       final asrBaseUrl = data['asr_base_url'] as String? ?? '';
       final hasAsrApiKey = data['has_asr_api_key'] == true;
       final asrModel = data['asr_model'] as String? ?? _defaultAsrModel;
@@ -62,9 +64,9 @@ class AiSettingsRepository {
       );
     }
     return const AiSettings(
-      baseUrl: '',
+      baseUrl: _defaultAgentBaseUrl,
       hasApiKey: false,
-      modelName: '',
+      modelName: _defaultAgentModel,
       asrBaseUrl: '',
       hasAsrApiKey: false,
       asrModel: _defaultAsrModel,
@@ -105,9 +107,9 @@ class AiSettingsRepository {
       auth: true,
     );
     if (data is Map<String, dynamic>) {
-      final nextBaseUrl = data['base_url'] as String? ?? '';
+      final nextBaseUrl = data['base_url'] as String? ?? _defaultAgentBaseUrl;
       final hasApiKey = data['has_api_key'] == true;
-      final nextModelName = data['model_name'] as String? ?? '';
+      final nextModelName = data['model_name'] as String? ?? _defaultAgentModel;
       final nextAsrBaseUrl = data['asr_base_url'] as String? ?? '';
       final hasAsrApiKey = data['has_asr_api_key'] == true;
       final nextAsrModel = data['asr_model'] as String? ?? _defaultAsrModel;
@@ -129,9 +131,9 @@ class AiSettingsRepository {
       );
     }
     return const AiSettings(
-      baseUrl: '',
+      baseUrl: _defaultAgentBaseUrl,
       hasApiKey: false,
-      modelName: '',
+      modelName: _defaultAgentModel,
       asrBaseUrl: '',
       hasAsrApiKey: false,
       asrModel: _defaultAsrModel,

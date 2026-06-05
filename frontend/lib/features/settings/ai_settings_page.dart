@@ -228,7 +228,7 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                       baseUrlLabel: 'Agent Base URL',
                       apiKeyLabel: 'Agent API Key',
                       modelLabel: 'Agent Model Name',
-                      defaultModelHint: '留空使用默认模型（例如 gpt-5）',
+                      defaultModelHint: 'deepseek-v4-flash',
                       onToggleApiKey: () =>
                           setState(() => _showAgentKey = !_showAgentKey),
                       onSubmitted: () => _save('Agent 配置已更新'),

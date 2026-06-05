@@ -118,9 +118,9 @@ SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool(
 SECURE_HSTS_PRELOAD = env_bool("DJANGO_SECURE_HSTS_PRELOAD", default=False)
 X_FRAME_OPTIONS = "DENY"
 
-AGENT_LLM_BASE_URL = os.environ.get("AGENT_LLM_BASE_URL", "")
+AGENT_LLM_BASE_URL = os.environ.get("AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
 AGENT_LLM_API_KEY = os.environ.get("AGENT_LLM_API_KEY", "")
-AGENT_LLM_MODEL = os.environ.get("AGENT_LLM_MODEL", "gpt-5")
+AGENT_LLM_MODEL = os.environ.get("AGENT_LLM_MODEL", "deepseek-v4-flash")
 AGENT_ASR_BASE_URL = os.environ.get(
     "AGENT_ASR_BASE_URL",
     "https://dashscope.aliyuncs.com/compatible-mode/v1",

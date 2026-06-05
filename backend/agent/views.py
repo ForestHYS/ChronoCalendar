@@ -267,13 +267,15 @@ class UserLlmConfigView(APIView):
     permission_classes = [IsAuthenticated]
 
     def _payload(self, cfg):
+        default_base_url = getattr(settings, "AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
+        default_model = getattr(settings, "AGENT_LLM_MODEL", "deepseek-v4-flash")
         default_asr_model = getattr(settings, "AGENT_ASR_MODEL", "qwen3-asr-flash")
         default_tts_model = getattr(settings, "AGENT_TTS_MODEL", "qwen3-tts-flash")
         if not cfg:
             return {
-                "base_url": "",
+                "base_url": default_base_url,
                 "has_api_key": False,
-                "model_name": "",
+                "model_name": default_model,
                 "asr_base_url": getattr(
                     settings,
                     "AGENT_ASR_BASE_URL",
@@ -291,9 +293,9 @@ class UserLlmConfigView(APIView):
                 "tts_voice": "Cherry",
             }
         return {
-            "base_url": cfg.base_url,
+            "base_url": cfg.base_url or default_base_url,
             "has_api_key": bool(cfg.api_key),
-            "model_name": cfg.model_name,
+            "model_name": cfg.model_name or default_model,
             "asr_base_url": cfg.asr_base_url
             or getattr(
                 settings,
@@ -379,9 +381,14 @@ class UserLlmConfigTestView(APIView):
         api_key = data.get("api_key") if "api_key" in data else (cfg.api_key if cfg else "")
         model_name = data.get("model_name") if "model_name" in data else (cfg.model_name if cfg else "")
 
-        base_url = (base_url or "").strip().rstrip("/")
+        default_base_url = getattr(settings, "AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
+        base_url = ((base_url or "").strip() or default_base_url).rstrip("/")
         api_key = (api_key or "").strip()
-        model_name = (model_name or "").strip() or getattr(settings, "AGENT_LLM_MODEL", "gpt-5")
+        model_name = (model_name or "").strip() or getattr(
+            settings,
+            "AGENT_LLM_MODEL",
+            "deepseek-v4-flash",
+        )
 
         result = test_llm_connection(
             api_key=api_key,
