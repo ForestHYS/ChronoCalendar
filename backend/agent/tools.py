@@ -375,7 +375,7 @@ def plan_gather_requirements(
         "只输出严格 JSON：\n"
         '{"questions":[{"id":"唯一id","text":"题目","multi":false,'
         '"options":[{"id":"选项id","label":"展示文案"}]}]}\n\n'
-        "建议覆盖：计划周期、每日可投入时间、侧重点/优先级、任务组织偏好（固定时段 block vs 灵活 todo）。\n"
+        "建议覆盖：计划周期、每日可投入时间、侧重点/优先级、任务组织偏好。\n"
         "每题 3～5 个选项，选项 id 用简短英文或数字，label 用中文。\n"
         "multi=true 表示可多选，默认 false。\n"
     )
@@ -465,13 +465,14 @@ def plan_generate_outline(
         '"phases":[{"title":"阶段名","description":"该阶段要做什么","duration_hint":"如第1周"}],'
         '"start_date":"YYYY-MM-DD","end_date":"YYYY-MM-DD","daily_hours":2.0,'
         '"planned_schedule_summary":{"todo_count":1,"block_count":2,"ddl_count":0,'
-        '"summary":"一句说明预计会生成几个 todo/block（如：1个待办含多子任务+每日学习块）"}}\n\n'
+        '"summary":"一句说明预计会生成几个 todo/block（如：1个待办含多子任务+专门的讲座/活动时间段）"}}\n\n'
         "规则：\n"
         "- phases 3～6 项，循序渐进；阶段细节留给后续 subtasks，勿过碎\n"
-        "- planned_schedule_summary 必填：预估排程阶段将生成的 todo_count、block_count（ddl_count 通常 0）\n"
+        "- planned_schedule_summary 必填：预估排程阶段将生成的 todo_count、block_count、ddl_count\n"
         "- start_date/end_date 根据答案中的周期推算，基于 user_local_time 的日期\n"
         "- daily_hours 根据答案估算，0.5～8\n"
         "- outline_text 清晰可读；在文末或 summary 中点明预计 todo/block 数量\n"
+        "- 注意，应用的block不包含可重复选项，因此每个block仅代表单次任务"
     )
     if refinement:
         system += (
