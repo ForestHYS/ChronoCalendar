@@ -7,6 +7,8 @@ import 'package:go_router/go_router.dart';
 import '../../core/agent_client_context.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/ui/app_error_dialog.dart';
+import '../../core/voice/speech_recognizer_service.dart';
+import '../../core/voice/speech_synthesizer_service.dart';
 import '../../data/agent_session_store.dart';
 import '../../data/providers.dart';
 
@@ -74,9 +76,15 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   final List<_SpeechJob> _speechQueue = [];
   final Set<String> _autoSpokenKeys = {};
 
+  late final SpeechRecognizerService _recognizer;
+  late final SpeechSynthesizerService _synthesizer;
+  bool _disposed = false;
+
   @override
   void initState() {
     super.initState();
+    _recognizer = ref.read(speechRecognizerServiceProvider);
+    _synthesizer = ref.read(speechSynthesizerServiceProvider);
     _restoreSession();
   }
 
@@ -194,19 +202,28 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
   @override
   void dispose() {
-    unawaited(_stopSpeech());
+    _disposed = true;
+    _speechGeneration++;
+    _speechQueue.clear();
+    _speechRunning = false;
+    _speakingText = null;
+    _listening = false;
+    _voiceBusy = false;
     unawaited(
-      ref
-          .read(speechRecognizerServiceProvider)
-          .cancel()
-          .then(
-            (_) {},
-            onError: (Object e, StackTrace st) {
-              debugPrint(
-                'speechRecognizer.cancel() failed in dispose: $e\n$st',
-              );
-            },
-          ),
+      _synthesizer.stop().then(
+        (_) {},
+        onError: (Object e, StackTrace st) {
+          debugPrint('speechSynthesizer.stop() failed in dispose: $e\n$st');
+        },
+      ),
+    );
+    unawaited(
+      _recognizer.cancel().then(
+        (_) {},
+        onError: (Object e, StackTrace st) {
+          debugPrint('speechRecognizer.cancel() failed in dispose: $e\n$st');
+        },
+      ),
     );
     _inputC.dispose();
     _scrollC.dispose();
@@ -223,11 +240,10 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   Future<void> _toggleListening() async {
     if (_voiceBusy || _sending) return;
     await _stopSpeech();
-    final recognizer = ref.read(speechRecognizerServiceProvider);
     if (_listening) {
       setState(() => _voiceBusy = true);
       try {
-        await recognizer.stop();
+        await _recognizer.stop();
       } finally {
         if (mounted) {
           setState(() {
@@ -241,7 +257,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
     setState(() => _voiceBusy = true);
     try {
-      final started = await recognizer.listen(
+      final started = await _recognizer.listen(
         localeId: 'zh_CN',
         onResult: (text, _) {
           if (!mounted) return;
@@ -295,35 +311,28 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   Future<void> _stopSpeech() async {
     _speechGeneration++;
     _speechQueue.clear();
-    if (mounted) {
-      setState(() {
-        _speechRunning = false;
-        _speakingText = null;
-      });
-    } else {
-      _speechRunning = false;
-      _speakingText = null;
+    _speechRunning = false;
+    _speakingText = null;
+    if (!_disposed && mounted) {
+      setState(() {});
     }
     try {
-      await ref.read(speechSynthesizerServiceProvider).stop();
+      await _synthesizer.stop();
     } catch (_) {
       // 页面切换或 provider 正在释放时，停止失败不需要打断交互。
     }
   }
 
   Future<void> _playSpeech(String text) async {
+    if (_disposed) return;
     final gen = ++_speechGeneration;
-    if (mounted) {
-      setState(() {
-        _speechRunning = true;
-        _speakingText = text;
-      });
-    } else {
-      _speechRunning = true;
-      _speakingText = text;
+    _speechRunning = true;
+    _speakingText = text;
+    if (!_disposed && mounted) {
+      setState(() {});
     }
     try {
-      await ref.read(speechSynthesizerServiceProvider).speak(text);
+      await _synthesizer.speak(text);
     } catch (e) {
       if (gen == _speechGeneration) {
         _speechQueue.clear();
@@ -333,14 +342,10 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
       }
     } finally {
       if (gen == _speechGeneration) {
-        if (mounted) {
-          setState(() {
-            _speechRunning = false;
-            _speakingText = null;
-          });
-        } else {
-          _speechRunning = false;
-          _speakingText = null;
+        _speechRunning = false;
+        _speakingText = null;
+        if (!_disposed && mounted) {
+          setState(() {});
         }
       }
     }
