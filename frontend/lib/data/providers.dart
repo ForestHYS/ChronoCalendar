@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,6 +20,21 @@ import 'agent_repository.dart';
 import 'agent_session_store.dart';
 import 'pomodoro_settings_repository.dart';
 import 'task_repository.dart';
+
+void _ignoreDisposeFuture(String label, Future<void> Function() action) {
+  try {
+    unawaited(
+      action().then(
+        (_) {},
+        onError: (Object e, StackTrace st) {
+          debugPrint('$label failed in onDispose: $e\n$st');
+        },
+      ),
+    );
+  } catch (e, st) {
+    debugPrint('$label failed in onDispose: $e\n$st');
+  }
+}
 
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError('Override in main()');
@@ -68,7 +85,9 @@ final speechRecognizerServiceProvider = Provider<SpeechRecognizerService>((
   final service = settings.agentAsrProvider == 'local'
       ? SystemSpeechRecognizerService()
       : CloudSpeechRecognizerService(ref.watch(apiClientProvider));
-  ref.onDispose(service.cancel);
+  ref.onDispose(() {
+    _ignoreDisposeFuture('speechRecognizer.cancel()', service.cancel);
+  });
   return service;
 });
 
@@ -81,9 +100,9 @@ final speechSynthesizerServiceProvider = Provider<SpeechSynthesizerService>((
       : CloudSpeechSynthesizerService(ref.watch(apiClientProvider));
   ref.onDispose(() {
     if (service is CloudSpeechSynthesizerService) {
-      service.dispose();
+      _ignoreDisposeFuture('speechSynthesizer.dispose()', service.dispose);
     } else {
-      service.stop();
+      _ignoreDisposeFuture('speechSynthesizer.stop()', service.stop);
     }
   });
   return service;

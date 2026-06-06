@@ -1,10 +1,13 @@
 import base64
 import binascii
+import ipaddress
 import json
 import logging
+import socket
 from dataclasses import dataclass
 from typing import Optional
 from urllib import error as urlerror
+from urllib import parse as urlparse
 from urllib import request as urlrequest
 
 from django.conf import settings
@@ -29,6 +32,7 @@ QWEN_TTS_PATH = "/services/aigc/multimodal-generation/generation"
 SUPPORTED_INPUT_FORMATS = {"wav", "mp3"}
 SUPPORTED_OUTPUT_FORMATS = {"mp3", "wav"}
 MAX_AUDIO_BYTES = 8 * 1024 * 1024
+BLOCKED_AUDIO_HOSTS = {"localhost", "localhost.localdomain"}
 
 
 @dataclass(frozen=True)
@@ -155,9 +159,58 @@ def _extract_tts_audio_url(data: dict) -> str:
     return ""
 
 
+def _validate_audio_download_url(url: str) -> None:
+    parsed = urlparse.urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("unsafe_audio_url")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("unsafe_audio_url")
+
+    normalized_host = host.rstrip(".").lower()
+    if (
+        normalized_host in BLOCKED_AUDIO_HOSTS
+        or normalized_host.endswith(".localhost")
+    ):
+        raise ValueError("unsafe_audio_url")
+
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        infos = socket.getaddrinfo(
+            normalized_host,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+    except (socket.gaierror, ValueError) as e:
+        raise ValueError("unsafe_audio_url") from e
+
+    addresses = {
+        info[4][0]
+        for info in infos
+        if info[4] and isinstance(info[4][0], str)
+    }
+    if not addresses:
+        raise ValueError("unsafe_audio_url")
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address)
+        except ValueError as e:
+            raise ValueError("unsafe_audio_url") from e
+        if not ip.is_global or ip.is_multicast:
+            raise ValueError("unsafe_audio_url")
+
+
+class _SafeAudioRedirectHandler(urlrequest.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_audio_download_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _download_audio(url: str) -> tuple[bytes, str]:
+    _validate_audio_download_url(url)
     req = urlrequest.Request(url, headers={"User-Agent": "ChronoCalendar/1.0"})
-    with urlrequest.urlopen(req, timeout=30) as resp:
+    opener = urlrequest.build_opener(_SafeAudioRedirectHandler)
+    with opener.open(req, timeout=30) as resp:
         content_type = resp.headers.get("Content-Type", "")
         return resp.read(), content_type
 
@@ -281,7 +334,11 @@ def synthesize_with_audio_model(
         audio_url = _extract_tts_audio_url(data)
         if not audio_url:
             return AudioResult(ok=False, data=None, error="empty_audio_response")
-        audio_bytes, content_type = _download_audio(audio_url)
+        try:
+            audio_bytes, content_type = _download_audio(audio_url)
+        except ValueError:
+            logger.warning("Audio TTS rejected unsafe audio_url")
+            return AudioResult(ok=False, data=None, error="unsafe_audio_url")
         if not audio_bytes:
             return AudioResult(ok=False, data=None, error="empty_audio_response")
         output_format = _audio_format_from_content_type(content_type)

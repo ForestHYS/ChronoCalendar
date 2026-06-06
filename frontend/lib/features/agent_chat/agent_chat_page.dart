@@ -195,7 +195,19 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   @override
   void dispose() {
     unawaited(_stopSpeech());
-    ref.read(speechRecognizerServiceProvider).cancel();
+    unawaited(
+      ref
+          .read(speechRecognizerServiceProvider)
+          .cancel()
+          .then(
+            (_) {},
+            onError: (Object e, StackTrace st) {
+              debugPrint(
+                'speechRecognizer.cancel() failed in dispose: $e\n$st',
+              );
+            },
+          ),
+    );
     _inputC.dispose();
     _scrollC.dispose();
     super.dispose();

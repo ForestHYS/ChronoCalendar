@@ -76,4 +76,6 @@ def _audio_error_response(code: str | None, *, default: str):
         return err("VALIDATION_ERROR", "文本过长，请缩短后再朗读")
     if code == "empty_audio_response":
         return err("AUDIO_EMPTY", "语音服务没有返回音频")
+    if code == "unsafe_audio_url":
+        return err("UNSAFE_AUDIO_URL", "语音服务返回的音频地址不安全")
     return err("AUDIO_ERROR", default, {"reason": code or "unknown"})

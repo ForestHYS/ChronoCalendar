@@ -6,13 +6,14 @@ import 'speech_synthesizer_service.dart';
 
 class SystemSpeechSynthesizerService implements SpeechSynthesizerService {
   SystemSpeechSynthesizerService() {
-    _tts.awaitSpeakCompletion(true);
+    _ready = _tts.awaitSpeakCompletion(true);
     _tts.setCompletionHandler(_finishCurrent);
     _tts.setCancelHandler(_finishCurrent);
     _tts.setErrorHandler((_) => _finishCurrent());
   }
 
   final FlutterTts _tts = FlutterTts();
+  late final Future<dynamic> _ready;
 
   bool _speaking = false;
   int _generation = 0;
@@ -30,15 +31,13 @@ class SystemSpeechSynthesizerService implements SpeechSynthesizerService {
     final gen = ++_generation;
     final completion = Completer<void>();
     _completion = completion;
+    await _ready;
     await _tts.setLanguage(localeId ?? 'zh-CN');
     await _tts.setSpeechRate(0.48);
     await _tts.setPitch(1.0);
     _speaking = true;
     try {
       await _tts.speak(value);
-      if (_generation == gen && !completion.isCompleted) {
-        _finishCurrent();
-      }
       await completion.future;
     } catch (_) {
       if (_generation == gen) _finishCurrent();
