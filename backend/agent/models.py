@@ -82,6 +82,13 @@ class UserLlmConfig(models.Model):
     base_url = models.CharField(max_length=300, blank=True, default="")
     api_key = models.CharField(max_length=200, blank=True, default="")
     model_name = models.CharField(max_length=100, blank=True, default="")
+    asr_base_url = models.CharField(max_length=300, blank=True, default="")
+    asr_api_key = models.CharField(max_length=200, blank=True, default="")
+    asr_model = models.CharField(max_length=100, blank=True, default="")
+    tts_base_url = models.CharField(max_length=300, blank=True, default="")
+    tts_api_key = models.CharField(max_length=200, blank=True, default="")
+    tts_model = models.CharField(max_length=100, blank=True, default="")
+    tts_voice = models.CharField(max_length=50, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -21,6 +21,7 @@ python manage.py runserver
 | 登录获取 Token | `POST` | `/api/v1/auth/login/` |
 | 刷新 Token | `POST` | `/api/v1/auth/refresh/` |
 | 登出 | `POST` | `/api/v1/auth/logout/` |
+| 注销账户 | `DELETE` | `/api/v1/auth/me/` |
 | 创建任务 | `POST` | `/api/v1/tasks/` |
 | 查询任务列表 | `GET` | `/api/v1/tasks/?type=block&status=active` |
 | 查询单个任务 | `GET` | `/api/v1/tasks/{id}/` |
@@ -151,6 +152,29 @@ Authorization: Bearer <access_token>
 > 若未启用黑名单，客户端删除本地 token 即视为登出，本接口仍返回 204。
 
 **成功响应：** `204 No Content`
+
+---
+
+### 注销账户
+
+```
+DELETE /auth/me/
+Authorization: Bearer <access_token>
+```
+
+**请求体：**
+
+```json
+{ "current_password": "yourpassword", "refresh_token": "<refresh_token>" }
+```
+
+服务端会校验当前密码，校验通过后删除当前用户及其关联数据。客户端应清除本地 token 并回到登录页。
+
+**成功响应：**
+
+```json
+{ "data": { "ok": true } }
+```
 
 ---
 

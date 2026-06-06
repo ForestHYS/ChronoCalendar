@@ -27,6 +27,10 @@ from .llm import test_llm_connection, is_llm_configured, llm_not_configured_resp
 _graph = None
 
 
+def _setting_value(name, default=""):
+    return (getattr(settings, name, "") or "").strip() or default
+
+
 def _get_graph():
     global _graph
     if _graph is None:
@@ -239,6 +243,14 @@ class ConfirmPlanView(APIView):
                 if msg.content_json.get("type") == "plan_preview":
                     merged = dict(msg.content_json)
                     merged["plan_confirmed"] = True
+                    selected_indices = request.data.get("selected_indices")
+                    if isinstance(selected_indices, list):
+                        task_count = len(merged.get("tasks") or [])
+                        cleaned_indices = []
+                        for idx in selected_indices:
+                            if isinstance(idx, int) and 0 <= idx < task_count:
+                                cleaned_indices.append(idx)
+                        merged["plan_selected_indices"] = cleaned_indices
                     msg.content_json = merged
                     msg.save(update_fields=["content_json"])
 
@@ -266,15 +278,48 @@ class UserLlmConfigView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    def _payload(self, cfg):
+        default_base_url = _setting_value("AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
+        default_model = _setting_value("AGENT_LLM_MODEL", "deepseek-v4-flash")
+        default_asr_base_url = _setting_value(
+            "AGENT_ASR_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        default_asr_model = _setting_value("AGENT_ASR_MODEL", "qwen3-asr-flash")
+        default_tts_base_url = _setting_value(
+            "AGENT_TTS_BASE_URL",
+            "https://dashscope.aliyuncs.com/api/v1",
+        )
+        default_tts_model = _setting_value("AGENT_TTS_MODEL", "qwen3-tts-flash")
+        if not cfg:
+            return {
+                "base_url": default_base_url,
+                "has_api_key": False,
+                "model_name": default_model,
+                "asr_base_url": default_asr_base_url,
+                "has_asr_api_key": False,
+                "asr_model": default_asr_model,
+                "tts_base_url": default_tts_base_url,
+                "has_tts_api_key": False,
+                "tts_model": default_tts_model,
+                "tts_voice": "Cherry",
+            }
+        return {
+            "base_url": cfg.base_url or default_base_url,
+            "has_api_key": bool(cfg.api_key),
+            "model_name": cfg.model_name or default_model,
+            "asr_base_url": cfg.asr_base_url or default_asr_base_url,
+            "has_asr_api_key": bool(cfg.asr_api_key),
+            "asr_model": cfg.asr_model or default_asr_model,
+            "tts_base_url": cfg.tts_base_url or default_tts_base_url,
+            "has_tts_api_key": bool(cfg.tts_api_key),
+            "tts_model": cfg.tts_model or default_tts_model,
+            "tts_voice": cfg.tts_voice or "Cherry",
+        }
+
     def get(self, request):
         cfg = UserLlmConfig.objects.filter(user=request.user).first()
-        if not cfg:
-            return ok({"base_url": "", "has_api_key": False, "model_name": ""})
-        return ok({
-            "base_url": cfg.base_url,
-            "has_api_key": bool(cfg.api_key),
-            "model_name": cfg.model_name,
-        })
+        return ok(self._payload(cfg))
 
     def patch(self, request):
         s = UserLlmConfigInSerializer(data=request.data)
@@ -295,15 +340,34 @@ class UserLlmConfigView(APIView):
         if "model_name" in data:
             cfg.model_name = (data.get("model_name") or "").strip()
             update_fields.append("model_name")
+        if "asr_base_url" in data:
+            raw = (data.get("asr_base_url") or "").strip()
+            cfg.asr_base_url = raw.rstrip("/") if raw else ""
+            update_fields.append("asr_base_url")
+        if "asr_api_key" in data:
+            cfg.asr_api_key = (data.get("asr_api_key") or "").strip()
+            update_fields.append("asr_api_key")
+        if "asr_model" in data:
+            cfg.asr_model = (data.get("asr_model") or "").strip()
+            update_fields.append("asr_model")
+        if "tts_base_url" in data:
+            raw = (data.get("tts_base_url") or "").strip()
+            cfg.tts_base_url = raw.rstrip("/") if raw else ""
+            update_fields.append("tts_base_url")
+        if "tts_api_key" in data:
+            cfg.tts_api_key = (data.get("tts_api_key") or "").strip()
+            update_fields.append("tts_api_key")
+        if "tts_model" in data:
+            cfg.tts_model = (data.get("tts_model") or "").strip()
+            update_fields.append("tts_model")
+        if "tts_voice" in data:
+            cfg.tts_voice = (data.get("tts_voice") or "").strip()
+            update_fields.append("tts_voice")
 
         if update_fields:
             cfg.save(update_fields=update_fields + ["updated_at"])
 
-        return ok({
-            "base_url": cfg.base_url,
-            "has_api_key": bool(cfg.api_key),
-            "model_name": cfg.model_name,
-        })
+        return ok(self._payload(cfg))
 
 
 class UserLlmConfigTestView(APIView):
@@ -323,9 +387,13 @@ class UserLlmConfigTestView(APIView):
         api_key = data.get("api_key") if "api_key" in data else (cfg.api_key if cfg else "")
         model_name = data.get("model_name") if "model_name" in data else (cfg.model_name if cfg else "")
 
-        base_url = (base_url or "").strip().rstrip("/")
+        default_base_url = _setting_value("AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
+        base_url = ((base_url or "").strip() or default_base_url).rstrip("/")
         api_key = (api_key or "").strip()
-        model_name = (model_name or "").strip() or getattr(settings, "AGENT_LLM_MODEL", "gpt-4o-mini")
+        model_name = (model_name or "").strip() or _setting_value(
+            "AGENT_LLM_MODEL",
+            "deepseek-v4-flash",
+        )
 
         result = test_llm_connection(
             api_key=api_key,

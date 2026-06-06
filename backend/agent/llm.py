@@ -18,7 +18,11 @@ class LlmResult:
 
 
 def _default_model() -> str:
-    return getattr(settings, "AGENT_LLM_MODEL", "gpt-4o-mini")
+    return getattr(settings, "AGENT_LLM_MODEL", "deepseek-v4-flash")
+
+
+def _default_base_url() -> str:
+    return getattr(settings, "AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
 
 
 def _json_max_retries() -> int:
@@ -125,7 +129,7 @@ def llm_not_configured_response() -> dict:
 
 def _load_llm_config(user_id: Optional[str]) -> tuple[str, Optional[str], str]:
     api_key = (getattr(settings, "AGENT_LLM_API_KEY", "") or "").strip()
-    base_url = (getattr(settings, "AGENT_LLM_BASE_URL", "") or "").strip() or None
+    base_url = (_default_base_url() or "").strip() or None
     model = _default_model()
 
     if not user_id:

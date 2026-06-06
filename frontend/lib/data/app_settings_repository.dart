@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -5,12 +7,18 @@ const _kAutoDeleteCompletedHours = 'auto_delete_completed_hours';
 const _kAutoDeleteOverdueHours = 'auto_delete_overdue_hours';
 const _kPinnedTodoIds = 'pinned_todo_ids';
 const _kHomeTodoShortcutIds = 'home_todo_shortcut_ids';
+const _kAgentAutoSpeak = 'agent_auto_speak';
+const _kAgentAsrProvider = 'agent_asr_provider';
+const _kAgentTtsProvider = 'agent_tts_provider';
+const _kAgentAutoSpeakMigratedPrefix = 'agent_auto_speak_migrated';
+const _kAgentVoiceProviderMigratedPrefix = 'agent_voice_provider_migrated';
 
 /// 应用级本地偏好（非番茄钟）。
 class AppSettingsRepository extends ChangeNotifier {
   AppSettingsRepository(this._prefs);
 
   final SharedPreferences _prefs;
+  String? _currentUserKey;
 
   static const maxPinnedTodos = 3;
   static const homeShortcutTodoLimit = 3;
@@ -27,8 +35,25 @@ class AppSettingsRepository extends ChangeNotifier {
       List.unmodifiable(_prefs.getStringList(_kPinnedTodoIds) ?? const []);
 
   /// 主页 Todo 快捷栏展示顺序（最多 [homeShortcutTodoLimit] 个 id）。
-  List<String> get homeTodoShortcutIds =>
-      List.unmodifiable(_prefs.getStringList(_kHomeTodoShortcutIds) ?? const []);
+  List<String> get homeTodoShortcutIds => List.unmodifiable(
+    _prefs.getStringList(_kHomeTodoShortcutIds) ?? const [],
+  );
+
+  bool get agentAutoSpeak =>
+      _prefs.getBool(_scopedUserKey(_kAgentAutoSpeak)) ?? true;
+
+  String get agentAsrProvider => _voiceProvider(_kAgentAsrProvider);
+
+  String get agentTtsProvider => _voiceProvider(_kAgentTtsProvider);
+
+  void setCurrentUserEmail(String? email) {
+    final next = _normalizeUserKey(email);
+    if (_currentUserKey == next) return;
+    _currentUserKey = next;
+    _migrateLegacyAgentAutoSpeakForCurrentUser();
+    _migrateLegacyVoiceProviderForCurrentUser();
+    notifyListeners();
+  }
 
   bool isTodoPinned(String id) => pinnedTodoIds.contains(id);
 
@@ -71,6 +96,27 @@ class AppSettingsRepository extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setAgentAutoSpeak(bool enabled) async {
+    await _prefs.setBool(_scopedUserKey(_kAgentAutoSpeak), enabled);
+    notifyListeners();
+  }
+
+  Future<void> setAgentAsrProvider(String provider) async {
+    await _prefs.setString(
+      _scopedUserKey(_kAgentAsrProvider),
+      _normalizeVoiceProvider(provider),
+    );
+    notifyListeners();
+  }
+
+  Future<void> setAgentTtsProvider(String provider) async {
+    await _prefs.setString(
+      _scopedUserKey(_kAgentTtsProvider),
+      _normalizeVoiceProvider(provider),
+    );
+    notifyListeners();
+  }
+
   /// 固定 Todo 到主页快捷栏；已满 [maxPinnedTodos] 个时返回 `false`。
   Future<bool> setTodoPinned(String taskId, bool pinned) async {
     var ids = List<String>.from(pinnedTodoIds);
@@ -84,5 +130,58 @@ class AppSettingsRepository extends ChangeNotifier {
     await _prefs.setStringList(_kPinnedTodoIds, ids);
     notifyListeners();
     return true;
+  }
+
+  String _voiceProvider(String key) {
+    return _normalizeVoiceProvider(
+      _prefs.getString(_scopedUserKey(key)) ?? 'local',
+    );
+  }
+
+  String _normalizeVoiceProvider(String provider) {
+    return provider == 'local' ? 'local' : 'cloud';
+  }
+
+  String _scopedUserKey(String key) {
+    final userKey = _currentUserKey;
+    if (userKey == null || userKey.isEmpty) return key;
+    return '$key:$userKey';
+  }
+
+  String? _normalizeUserKey(String? email) {
+    final value = email?.trim().toLowerCase();
+    if (value == null || value.isEmpty) return null;
+    return value;
+  }
+
+  void _migrateLegacyAgentAutoSpeakForCurrentUser() {
+    final userKey = _currentUserKey;
+    if (userKey == null || userKey.isEmpty) return;
+    final migratedKey = '$_kAgentAutoSpeakMigratedPrefix:$userKey';
+    if (_prefs.getBool(migratedKey) == true) return;
+
+    final scopedKey = _scopedUserKey(_kAgentAutoSpeak);
+    final legacy = _prefs.getBool(_kAgentAutoSpeak);
+    if (!_prefs.containsKey(scopedKey) && legacy != null) {
+      unawaited(_prefs.setBool(scopedKey, legacy));
+    }
+    unawaited(_prefs.setBool(migratedKey, true));
+  }
+
+  void _migrateLegacyVoiceProviderForCurrentUser() {
+    final userKey = _currentUserKey;
+    if (userKey == null || userKey.isEmpty) return;
+    final migratedKey = '$_kAgentVoiceProviderMigratedPrefix:$userKey';
+    if (_prefs.getBool(migratedKey) == true) return;
+
+    for (final key in const [_kAgentAsrProvider, _kAgentTtsProvider]) {
+      final scopedKey = _scopedUserKey(key);
+      if (_prefs.containsKey(scopedKey)) continue;
+      final legacy = _prefs.getString(key);
+      if (legacy != null) {
+        unawaited(_prefs.setString(scopedKey, _normalizeVoiceProvider(legacy)));
+      }
+    }
+    unawaited(_prefs.setBool(migratedKey, true));
   }
 }
