@@ -18,6 +18,8 @@ bool _agentPayloadAlreadyActed(Map<String, dynamic> json) {
       (json['type'] == 'plan_outline' && json['outline_confirmed'] == true);
 }
 
+const _kPlanSelectedIndices = 'plan_selected_indices';
+
 List<_ChatItem> _chatItemsFromRawMessages(List<Map<String, dynamic>> msgs) {
   final restored = <_ChatItem>[];
   for (final m in msgs) {
@@ -89,6 +91,39 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
       ..addAll(_chatItemsFromRawMessages(_rawMessages));
   }
 
+  List<Map<String, dynamic>> _mergeLocalPlanUiState(
+    List<Map<String, dynamic>> remoteMessages,
+    List<Map<String, dynamic>> localMessages,
+  ) {
+    final selectedByMessageId = <String, List<dynamic>>{};
+    for (final msg in localMessages) {
+      final id = msg['id'] as String?;
+      if (id == null || id.isEmpty) continue;
+      final json = msg['content_json'];
+      if (json is! Map<String, dynamic> ||
+          json['type'] != 'plan_preview' ||
+          json[_kPlanSelectedIndices] is! List) {
+        continue;
+      }
+      selectedByMessageId[id] = json[_kPlanSelectedIndices] as List;
+    }
+    if (selectedByMessageId.isEmpty) return remoteMessages;
+
+    return remoteMessages.map((msg) {
+      final id = msg['id'] as String?;
+      final selected = id == null ? null : selectedByMessageId[id];
+      if (selected == null) return msg;
+      final json = msg['content_json'];
+      if (json is! Map<String, dynamic> || json['type'] != 'plan_preview') {
+        return msg;
+      }
+      return {
+        ...msg,
+        'content_json': {...json, _kPlanSelectedIndices: selected},
+      };
+    }).toList();
+  }
+
   Future<void> _persistCache() async {
     final sid = _sessionId;
     if (sid == null || sid.isEmpty) return;
@@ -143,9 +178,10 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
       await _sessionStore.setLastSessionId(email, sid);
       final msgs = await repo.getMessages(sid);
       if (!mounted) return;
+      final mergedMsgs = _mergeLocalPlanUiState(msgs, _rawMessages);
       setState(() {
         _sessionId = sid;
-        _applyRawMessages(msgs);
+        _applyRawMessages(mergedMsgs);
       });
       await _persistCache();
       WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -395,7 +431,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     }
   }
 
-  void _markAssistantPayload(String messageId, Map<String, dynamic> patch) {
+  void _markAssistantPayload(
+    String messageId,
+    Map<String, dynamic> patch, {
+    bool markSubmitted = true,
+  }) {
     setState(() {
       final idx = _items.indexWhere(
         (it) => !it.isUser && it.messageId == messageId,
@@ -406,7 +446,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
       _items[idx] = _ChatItem.assistant(
         {...p, ...patch},
         messageId: messageId,
-        initialSubmitted: true,
+        initialSubmitted: markSubmitted || _items[idx].initialSubmitted,
       );
       final rawIdx = _rawMessages.indexWhere((m) => m['id'] == messageId);
       if (rawIdx >= 0) {
@@ -580,6 +620,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                                 'plan_confirmed': true,
                               });
                             },
+                            onPlanSelectionChanged: (messageId, selected) {
+                              _markAssistantPayload(messageId, {
+                                _kPlanSelectedIndices: selected,
+                              }, markSubmitted: false);
+                            },
                             onPlanInteractionDone: _markAssistantPayload,
                             onSendInteraction: _sendInteraction,
                           ),
@@ -728,6 +773,7 @@ class _AssistantCard extends ConsumerStatefulWidget {
     this.messageId,
     this.initialSubmitted = false,
     this.onPlanConfirmed,
+    this.onPlanSelectionChanged,
     this.onPlanInteractionDone,
   });
   final Map<String, dynamic> payload;
@@ -741,6 +787,8 @@ class _AssistantCard extends ConsumerStatefulWidget {
   })
   onSendInteraction;
   final void Function(String messageId)? onPlanConfirmed;
+  final void Function(String messageId, List<int> selected)?
+  onPlanSelectionChanged;
   final void Function(String messageId, Map<String, dynamic> patch)?
   onPlanInteractionDone;
   final bool initialSubmitted;
@@ -999,6 +1047,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
             payload['plan_confirmed'] == true,
         onFollowUp: onFollowUp,
         onPlanConfirmed: widget.onPlanConfirmed,
+        onSelectionChanged: widget.onPlanSelectionChanged,
         onSpeak: widget.onSpeak,
       );
     }
@@ -1646,6 +1695,7 @@ class _PlanPreviewCard extends ConsumerStatefulWidget {
     this.messageId,
     this.initialSubmitted = false,
     this.onPlanConfirmed,
+    this.onSelectionChanged,
   });
 
   final Map<String, dynamic> payload;
@@ -1654,6 +1704,7 @@ class _PlanPreviewCard extends ConsumerStatefulWidget {
   final void Function(Map<String, dynamic> payload) onFollowUp;
   final Future<void> Function(String text) onSpeak;
   final void Function(String messageId)? onPlanConfirmed;
+  final void Function(String messageId, List<int> selected)? onSelectionChanged;
 
   @override
   ConsumerState<_PlanPreviewCard> createState() => _PlanPreviewCardState();
@@ -1672,19 +1723,39 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
     _taskList = (tasks is List)
         ? tasks.whereType<Map<String, dynamic>>().toList()
         : <Map<String, dynamic>>[];
-    _selected = Set<int>.from(List.generate(_taskList.length, (i) => i));
+    _selected = _initialSelectedIndices();
     _submitted =
         widget.initialSubmitted || widget.payload['plan_confirmed'] == true;
+  }
+
+  Set<int> _initialSelectedIndices() {
+    final stored = widget.payload[_kPlanSelectedIndices];
+    if (stored is List) {
+      return stored
+          .whereType<int>()
+          .where((i) => i >= 0 && i < _taskList.length)
+          .toSet();
+    }
+    return Set<int>.from(List.generate(_taskList.length, (i) => i));
+  }
+
+  void _notifySelectionChanged() {
+    final mid = widget.messageId;
+    if (mid == null || mid.isEmpty) return;
+    final selected = _selected.toList()..sort();
+    widget.onSelectionChanged?.call(mid, selected);
   }
 
   void _selectAll() {
     setState(() {
       _selected = Set<int>.from(List.generate(_taskList.length, (i) => i));
     });
+    _notifySelectionChanged();
   }
 
   void _selectNone() {
     setState(() => _selected.clear());
+    _notifySelectionChanged();
   }
 
   void _toggle(int index) {
@@ -1696,6 +1767,7 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
         _selected.add(index);
       }
     });
+    _notifySelectionChanged();
   }
 
   Future<void> _confirmSelected() async {
