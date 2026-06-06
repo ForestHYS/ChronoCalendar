@@ -27,6 +27,10 @@ from .llm import test_llm_connection, is_llm_configured, llm_not_configured_resp
 _graph = None
 
 
+def _setting_value(name, default=""):
+    return (getattr(settings, name, "") or "").strip() or default
+
+
 def _get_graph():
     global _graph
     if _graph is None:
@@ -275,27 +279,27 @@ class UserLlmConfigView(APIView):
     permission_classes = [IsAuthenticated]
 
     def _payload(self, cfg):
-        default_base_url = getattr(settings, "AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
-        default_model = getattr(settings, "AGENT_LLM_MODEL", "deepseek-v4-flash")
-        default_asr_model = getattr(settings, "AGENT_ASR_MODEL", "qwen3-asr-flash")
-        default_tts_model = getattr(settings, "AGENT_TTS_MODEL", "qwen3-tts-flash")
+        default_base_url = _setting_value("AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
+        default_model = _setting_value("AGENT_LLM_MODEL", "deepseek-v4-flash")
+        default_asr_base_url = _setting_value(
+            "AGENT_ASR_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
+        default_asr_model = _setting_value("AGENT_ASR_MODEL", "qwen3-asr-flash")
+        default_tts_base_url = _setting_value(
+            "AGENT_TTS_BASE_URL",
+            "https://dashscope.aliyuncs.com/api/v1",
+        )
+        default_tts_model = _setting_value("AGENT_TTS_MODEL", "qwen3-tts-flash")
         if not cfg:
             return {
                 "base_url": default_base_url,
                 "has_api_key": False,
                 "model_name": default_model,
-                "asr_base_url": getattr(
-                    settings,
-                    "AGENT_ASR_BASE_URL",
-                    "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                ),
+                "asr_base_url": default_asr_base_url,
                 "has_asr_api_key": False,
                 "asr_model": default_asr_model,
-                "tts_base_url": getattr(
-                    settings,
-                    "AGENT_TTS_BASE_URL",
-                    "https://dashscope.aliyuncs.com/api/v1",
-                ),
+                "tts_base_url": default_tts_base_url,
                 "has_tts_api_key": False,
                 "tts_model": default_tts_model,
                 "tts_voice": "Cherry",
@@ -304,16 +308,10 @@ class UserLlmConfigView(APIView):
             "base_url": cfg.base_url or default_base_url,
             "has_api_key": bool(cfg.api_key),
             "model_name": cfg.model_name or default_model,
-            "asr_base_url": cfg.asr_base_url
-            or getattr(
-                settings,
-                "AGENT_ASR_BASE_URL",
-                "https://dashscope.aliyuncs.com/compatible-mode/v1",
-            ),
+            "asr_base_url": cfg.asr_base_url or default_asr_base_url,
             "has_asr_api_key": bool(cfg.asr_api_key),
             "asr_model": cfg.asr_model or default_asr_model,
-            "tts_base_url": cfg.tts_base_url
-            or getattr(settings, "AGENT_TTS_BASE_URL", "https://dashscope.aliyuncs.com/api/v1"),
+            "tts_base_url": cfg.tts_base_url or default_tts_base_url,
             "has_tts_api_key": bool(cfg.tts_api_key),
             "tts_model": cfg.tts_model or default_tts_model,
             "tts_voice": cfg.tts_voice or "Cherry",
@@ -389,11 +387,10 @@ class UserLlmConfigTestView(APIView):
         api_key = data.get("api_key") if "api_key" in data else (cfg.api_key if cfg else "")
         model_name = data.get("model_name") if "model_name" in data else (cfg.model_name if cfg else "")
 
-        default_base_url = getattr(settings, "AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
+        default_base_url = _setting_value("AGENT_LLM_BASE_URL", "https://api.deepseek.com/")
         base_url = ((base_url or "").strip() or default_base_url).rstrip("/")
         api_key = (api_key or "").strip()
-        model_name = (model_name or "").strip() or getattr(
-            settings,
+        model_name = (model_name or "").strip() or _setting_value(
             "AGENT_LLM_MODEL",
             "deepseek-v4-flash",
         )

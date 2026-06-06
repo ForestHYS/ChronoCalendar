@@ -195,10 +195,6 @@ POSTGRES_USER=chronocalendar
 POSTGRES_PASSWORD=<替换成强密码>
 POSTGRES_HOST=db
 POSTGRES_PORT=5432
-
-AGENT_LLM_BASE_URL=https://api.deepseek.com/
-AGENT_LLM_API_KEY=<你的 LLM Key，可为空>
-AGENT_LLM_MODEL=deepseek-v4-flash
 ```
 
 生成 `DJANGO_SECRET_KEY`：
@@ -209,9 +205,11 @@ docker run --rm python:3.12-slim python -c "import secrets; print(secrets.token_
 
 AI 助手说明：
 
-- `AGENT_LLM_API_KEY` 为空时，文字 AI 助手会降级为“AI 未配置”，不会让接口 500。
-- 新版本支持云端 ASR/TTS。用户可以在客户端设置页单独配置语音服务；如果你想给服务器默认值，也可以在 `.env` 里补充 `AGENT_ASR_BASE_URL`、`AGENT_ASR_API_KEY`、`AGENT_ASR_MODEL`、`AGENT_TTS_BASE_URL`、`AGENT_TTS_API_KEY`、`AGENT_TTS_MODEL`。
-- 不要把真实 API Key 写进 `.env.example` 或提交到仓库。
+- Agent 的 LLM/ASR/TTS 配置遵循同一优先级：用户个人配置 > 服务器 `.env` 全局默认 > 代码中的缺省值。
+- `.env` 可用于设置全局默认 Base URL、API Key 和模型名；客户端“AI 配置”页保存的是当前账号的覆盖配置。
+- 如果用户没有配置个人 API Key，会回退到 `.env` 中对应的全局 API Key；如果两边都没有 Key，则返回“AI 未配置”，不会让接口 500。
+- 如果 `.env` 中 Base URL 或模型名留空，会继续使用代码中的缺省值。
+- 不要把真实 API Key 写进 `.env.example`、部署文档或仓库。
 
 ## 6. HTTPS 与 Cloudflare
 
