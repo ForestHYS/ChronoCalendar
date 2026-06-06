@@ -54,6 +54,18 @@
 
 - **POST** `/auth/logout`
 
+#### 2.4 注销账户
+
+- **DELETE** `/auth/me`
+- Header: `Authorization: Bearer <access_token>`
+- **Body**
+
+```json
+{ "current_password": "xxx", "refresh_token": "..." }
+```
+
+成功后删除当前用户及其关联数据，客户端应清除本地 token。
+
 ---
 
 ### 3. 标签（用户自定义）

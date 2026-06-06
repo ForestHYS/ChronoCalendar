@@ -56,6 +56,11 @@ class Command(BaseCommand):
         parser.add_argument("--password", default=DEFAULT_PASSWORD)
         parser.add_argument("--json", default=str(default_json))
         parser.add_argument(
+            "--force-reset",
+            action="store_true",
+            help="Delete the existing user (if any) before seeding.",
+        )
+        parser.add_argument(
             "--skip-import",
             action="store_true",
             help="Only rebuild focus sessions for already imported tasks.",
@@ -71,8 +76,11 @@ class Command(BaseCommand):
 
         email = options["email"]
         password = options["password"]
+        force_reset = options["force_reset"]
 
         with transaction.atomic():
+            if force_reset:
+                User.objects.filter(email=email).delete()
             user, created = User.objects.get_or_create(
                 email=email,
                 defaults={"username": email},

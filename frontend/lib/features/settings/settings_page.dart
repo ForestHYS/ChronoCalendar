@@ -59,7 +59,10 @@ class SettingsPage extends ConsumerWidget {
                         borderRadius: BorderRadius.circular(14),
                         border: Border.all(color: AppColors.outline),
                       ),
-                      child: const Icon(Icons.person_rounded, color: AppColors.primary),
+                      child: const Icon(
+                        Icons.person_rounded,
+                        color: AppColors.primary,
+                      ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
@@ -70,14 +73,22 @@ class SettingsPage extends ConsumerWidget {
                             nickname,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: AppColors.onSurface),
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                              color: AppColors.onSurface,
+                            ),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             email,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12.5, color: AppColors.onSurfaceVariant, height: 1.2),
+                            style: const TextStyle(
+                              fontSize: 12.5,
+                              color: AppColors.onSurfaceVariant,
+                              height: 1.2,
+                            ),
                           ),
                         ],
                       ),
@@ -85,12 +96,20 @@ class SettingsPage extends ConsumerWidget {
                     OutlinedButton(
                       onPressed: () => _showEditNickname(context, ref),
                       style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
                         minimumSize: const Size(0, 38),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
                       ),
-                      child: const Text('改昵称', style: TextStyle(fontWeight: FontWeight.w600)),
+                      child: const Text(
+                        '改昵称',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
                     ),
                   ],
                 ),
@@ -127,7 +146,9 @@ class SettingsPage extends ConsumerWidget {
                   leading: const Icon(Icons.auto_delete_outlined),
                   title: const Text('自动删除'),
                   subtitle: Text(
-                    _autoDeleteSummary(ref.watch(appSettingsRepositoryProvider)),
+                    _autoDeleteSummary(
+                      ref.watch(appSettingsRepositoryProvider),
+                    ),
                     style: const TextStyle(fontSize: 12.5),
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded),
@@ -185,12 +206,30 @@ class SettingsPage extends ConsumerWidget {
               },
             ),
           ),
+          const SizedBox(height: 12),
+          AppCard(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: ListTile(
+              leading: const Icon(
+                Icons.delete_forever_outlined,
+                color: AppColors.error,
+              ),
+              title: const Text(
+                '注销账户',
+                style: TextStyle(color: AppColors.error),
+              ),
+              onTap: () => _showDeleteAccount(context, ref),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  static Future<void> _showEditNickname(BuildContext context, WidgetRef ref) async {
+  static Future<void> _showEditNickname(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
     final initial = ref.read(authRepositoryProvider).nickname;
     final saved = await showDialog<bool>(
       context: context,
@@ -217,7 +256,10 @@ class SettingsPage extends ConsumerWidget {
     return parts.join(' · ');
   }
 
-  static Future<void> _showAutoDeleteSettings(BuildContext context, WidgetRef ref) async {
+  static Future<void> _showAutoDeleteSettings(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
     final saved = await showDialog<bool>(
       context: context,
       barrierDismissible: true,
@@ -233,7 +275,10 @@ class SettingsPage extends ConsumerWidget {
     await taskRepo.purgeExpiredOverdueTasks(overdue);
   }
 
-  static Future<void> _showChangePassword(BuildContext context, WidgetRef ref) async {
+  static Future<void> _showChangePassword(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
     final saved = await showDialog<bool>(
       context: context,
       barrierDismissible: true,
@@ -245,6 +290,20 @@ class SettingsPage extends ConsumerWidget {
         title: '已保存',
         message: '密码已更新，请使用新密码登录',
       );
+    }
+  }
+
+  static Future<void> _showDeleteAccount(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final deleted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => const _DeleteAccountDialog(),
+    );
+    if (deleted == true && context.mounted) {
+      context.go('/login');
     }
   }
 
@@ -428,7 +487,11 @@ class _AutoDeleteDialogState extends ConsumerState<_AutoDeleteDialog> {
           children: [
             const Text(
               '任务删除后专注记录仍会保留，不影响近 7 日专注统计。',
-              style: TextStyle(fontSize: 13, height: 1.45, color: AppColors.onSurfaceVariant),
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.45,
+                color: AppColors.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 16),
             _pickerRow(
@@ -494,7 +557,9 @@ class _AutoDeleteWheelPickerState extends State<_AutoDeleteWheelPicker> {
   @override
   void initState() {
     super.initState();
-    _controller = FixedExtentScrollController(initialItem: _indexForHours(widget.value));
+    _controller = FixedExtentScrollController(
+      initialItem: _indexForHours(widget.value),
+    );
   }
 
   @override
@@ -604,7 +669,8 @@ class _EditNicknameDialog extends ConsumerStatefulWidget {
   final String initial;
 
   @override
-  ConsumerState<_EditNicknameDialog> createState() => _EditNicknameDialogState();
+  ConsumerState<_EditNicknameDialog> createState() =>
+      _EditNicknameDialogState();
 }
 
 class _EditNicknameDialogState extends ConsumerState<_EditNicknameDialog> {
@@ -672,7 +738,8 @@ class _ChangePasswordDialog extends ConsumerStatefulWidget {
   const _ChangePasswordDialog();
 
   @override
-  ConsumerState<_ChangePasswordDialog> createState() => _ChangePasswordDialogState();
+  ConsumerState<_ChangePasswordDialog> createState() =>
+      _ChangePasswordDialogState();
 }
 
 class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
@@ -698,10 +765,9 @@ class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
     if (_saving) return;
     setState(() => _saving = true);
     try {
-      await ref.read(authNotifierProvider).changePassword(
-            current: _currentC.text,
-            next: _nextC.text,
-          );
+      await ref
+          .read(authNotifierProvider)
+          .changePassword(current: _currentC.text, next: _nextC.text);
       if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
@@ -749,6 +815,93 @@ class _ChangePasswordDialogState extends ConsumerState<_ChangePasswordDialog> {
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
               : const Text('保存'),
+        ),
+      ],
+    );
+  }
+}
+
+class _DeleteAccountDialog extends ConsumerStatefulWidget {
+  const _DeleteAccountDialog();
+
+  @override
+  ConsumerState<_DeleteAccountDialog> createState() =>
+      _DeleteAccountDialogState();
+}
+
+class _DeleteAccountDialogState extends ConsumerState<_DeleteAccountDialog> {
+  late final TextEditingController _passwordC;
+  bool _deleting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _passwordC = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _passwordC.dispose();
+    super.dispose();
+  }
+
+  Future<void> _delete() async {
+    if (_deleting) return;
+    setState(() => _deleting = true);
+    try {
+      await ref
+          .read(authNotifierProvider)
+          .deleteAccount(currentPassword: _passwordC.text);
+      if (!mounted) return;
+      Navigator.of(context).pop(true);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _deleting = false);
+      await showAppErrorDialog(context, title: '注销失败', error: e);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('注销账户'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            '注销后，该账户下的任务、标签、专注记录与 AI 会话将被删除，且无法恢复。',
+            style: TextStyle(
+              color: AppColors.onSurfaceVariant,
+              fontSize: 13,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _passwordC,
+            decoration: const InputDecoration(labelText: '当前密码'),
+            obscureText: true,
+            autofillHints: const [],
+            enabled: !_deleting,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _deleting ? null : () => Navigator.of(context).pop(false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: _deleting ? null : _delete,
+          style: FilledButton.styleFrom(backgroundColor: AppColors.error),
+          child: _deleting
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('注销账户'),
         ),
       ],
     );
@@ -831,11 +984,17 @@ class _AchievementSectionState extends State<_AchievementSection> {
                 children: [
                   const Text(
                     '成就勋章',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppColors.onSurface),
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.onSurface,
+                    ),
                   ),
                   const Spacer(),
                   Icon(
-                    _expanded ? Icons.expand_less_rounded : Icons.expand_more_rounded,
+                    _expanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
                     color: AppColors.onSurfaceVariant,
                   ),
                 ],
@@ -890,9 +1049,15 @@ class _AchievementCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final bg = a.unlocked ? Colors.white : AppColors.surfaceContainerHigh;
-    final border = a.unlocked ? AppColors.outline : AppColors.outline.withValues(alpha: 0.55);
-    final iconColor = a.unlocked ? AppColors.primary : AppColors.onSurfaceVariant;
-    final titleColor = a.unlocked ? AppColors.onSurface : AppColors.onSurfaceVariant;
+    final border = a.unlocked
+        ? AppColors.outline
+        : AppColors.outline.withValues(alpha: 0.55);
+    final iconColor = a.unlocked
+        ? AppColors.primary
+        : AppColors.onSurfaceVariant;
+    final titleColor = a.unlocked
+        ? AppColors.onSurface
+        : AppColors.onSurfaceVariant;
     final subColor = AppColors.onSurfaceVariant;
 
     return Container(
@@ -910,7 +1075,9 @@ class _AchievementCard extends StatelessWidget {
             decoration: BoxDecoration(
               color: a.unlocked ? AppColors.primaryContainer : Colors.white,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.outline.withValues(alpha: 0.6)),
+              border: Border.all(
+                color: AppColors.outline.withValues(alpha: 0.6),
+              ),
             ),
             child: Icon(a.icon, color: iconColor),
           ),
@@ -923,14 +1090,23 @@ class _AchievementCard extends StatelessWidget {
                   a.title,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w700, color: titleColor, height: 1.1),
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    fontWeight: FontWeight.w700,
+                    color: titleColor,
+                    height: 1.1,
+                  ),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   a.subtitle,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 11.5, color: subColor, height: 1.2),
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: subColor,
+                    height: 1.2,
+                  ),
                 ),
               ],
             ),
@@ -938,7 +1114,11 @@ class _AchievementCard extends StatelessWidget {
           if (!a.unlocked)
             const Padding(
               padding: EdgeInsets.only(left: 6),
-              child: Icon(Icons.lock_outline_rounded, size: 16, color: AppColors.onSurfaceVariant),
+              child: Icon(
+                Icons.lock_outline_rounded,
+                size: 16,
+                color: AppColors.onSurfaceVariant,
+              ),
             ),
         ],
       ),

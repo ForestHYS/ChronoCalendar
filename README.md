@@ -53,6 +53,8 @@ ChronoCalendar 是一个前后端分离的移动端日程管理应用，前端�
 
 ## 技术栈
 
+![技术架构图](assets/tech-stack.png)
+
 ### 后端
 
 | 技术 | 版本 / 说明 |
@@ -129,11 +131,7 @@ ChronoCalendar/
 │   ├── assets/audio/         # 白噪音音频资源
 │   └── pubspec.yaml
 │
-├── design.md                 # 功能设计文档
-├── visual-design.md          # 视觉设计规范
-├── api.md                    # API 详细文档
-├── db.md                     # 数据库设计文档
-└── agent-design.md           # AI Agent 技术方案
+├── README.md                 # 项目说明文档
 ```
 
 ---
@@ -156,18 +154,6 @@ python manage.py migrate
 # 启动开发服务器（默认 http://localhost:8000）
 python manage.py runserver
 ```
-
-**LLM 配置**（可选，不配置时 Agent 功能降级）：
-
-在 `backend/config/settings.py` 中修改以下字段：
-
-```python
-AGENT_LLM_BASE_URL = "https://your-llm-api-base/v1"
-AGENT_LLM_API_KEY  = "your-api-key"
-AGENT_LLM_MODEL    = "gpt-4o"   # 或其他兼容 OpenAI 接口的模型
-```
-
-> 生产部署时务必将 `SECRET_KEY` 替换为随机值，将 `DEBUG` 设为 `False`，并将数据库切换为 PostgreSQL。
 
 ### 前端
 
@@ -200,6 +186,7 @@ Base URL：`http://localhost:8000/api/v1`
 | 登录 | `POST` | `/auth/login/` |
 | 刷新 Token | `POST` | `/auth/refresh/` |
 | 登出 | `POST` | `/auth/logout/` |
+| 注销账户 | `DELETE` | `/auth/me/` |
 | 创建任务 | `POST` | `/tasks/` |
 | 查询任务列表 | `GET` | `/tasks/?type=block&status=active` |
 | 查询单个任务 | `GET` | `/tasks/{id}/` |
@@ -214,7 +201,262 @@ Base URL：`http://localhost:8000/api/v1`
 | 导出全部数据 | `GET` | `/tasks/export/` |
 | 导入数据 | `POST` | `/tasks/import/?mode=merge\|duplicate` |
 
-> 完整字段说明与响应示例见 [api.md](api.md)
+### 约定与规范
+
+- 时间：统一使用 ISO 8601（UTC）存储与传输；客户端展示可按本地时区转换
+- 通用响应结构
+  - 成功：`{ "data": ... }`
+  - 失败：`{ "error": { "code": "STRING", "message": "STRING", "details": {...?} } }`
+- 任务提醒：由 Android 客户端本地调度（`AlarmManager` + 系统通知）；服务端仅持久化 `remind_at` 字段，**不提供推送服务**
+
+---
+
+### 认证接口
+
+#### 登录 `POST /auth/login`
+
+**Body**
+
+```json
+{ "email": "a@b.com", "password": "xxx" }
+```
+
+**Resp**
+
+```json
+{
+  "data": {
+    "access_token": "...",
+    "refresh_token": "...",
+    "user": { "id": "...", "name": "..." }
+  }
+}
+```
+
+#### 刷新 Token `POST /auth/refresh`
+
+**Body**：`{ "refresh_token": "..." }`
+
+#### 退出登录 `POST /auth/logout`
+
+---
+
+### 标签接口
+
+| 操作 | Method | URL | Body |
+|------|--------|-----|------|
+| 创建标签 | `POST` | `/tags` | `{ "name": "学习", "color": "#4F46E5" }` |
+| 获取标签列表 | `GET` | `/tags` | — |
+| 更新标签 | `PATCH` | `/tags/{tagId}` | `{ "name": "...", "color": "..." }` |
+| 删除标签 | `DELETE` | `/tags/{tagId}` | — |
+
+---
+
+### 任务数据模型
+
+三类任务共享 `/tasks` 集合，以 `type` 字段区分。
+
+#### 通用字段
+
+| 字段 | 类型 | 读写 | 说明 |
+|------|------|------|------|
+| `id` | `string` | 只读 | UUID |
+| `type` | `"block" \| "ddl" \| "todo"` | 创建时必填，不可修改 | 任务类型 |
+| `title` | `string` | 必填 | 标题 |
+| `description` | `string?` | 可选 | 备注，默认空字符串 |
+| `tag_ids` | `string[]` | 可选 | 关联标签 ID 列表，默认 `[]` |
+| `status` | `"active" \| "completed" \| "cancelled" \| "overdue"` | 只读 | 任务状态 |
+| `remind_at` | `datetime?` | 可选 | 提醒时间（UTC）；`null` 表示不提醒；客户端本地调度 |
+| `focus_total_seconds` | `number` | 只读 | 累计专注秒数 |
+| `created_at` | `datetime` | 只读 | 创建时间（UTC） |
+| `updated_at` | `datetime` | 只读 | 最近更新时间（UTC） |
+
+#### Block 额外字段
+
+| 字段 | 类型 | 读写 | 说明 |
+|------|------|------|------|
+| `start_at` | `datetime` | 必填 | 开始时间（UTC） |
+| `end_at` | `datetime` | 必填 | 结束时间（UTC）；须严格晚于 `start_at` |
+
+**约束**：`end_at > start_at`，否则返回 `400 INVALID_TIME_RANGE`
+
+**响应示例**
+
+```json
+{
+  "id": "blk_001", "type": "block", "title": "高数课", "description": "第五章极限",
+  "tag_ids": ["tag_study"], "status": "active",
+  "start_at": "2026-04-22T08:00:00Z", "end_at": "2026-04-22T09:40:00Z",
+  "remind_at": "2026-04-22T07:50:00Z", "focus_total_seconds": 0,
+  "created_at": "2026-04-21T12:00:00Z", "updated_at": "2026-04-21T12:00:00Z"
+}
+```
+
+#### DDL 额外字段
+
+| 字段 | 类型 | 读写 | 说明 |
+|------|------|------|------|
+| `due_at` | `datetime` | 必填 | 截止时间（UTC）；超时后 `status` 自动变为 `overdue` |
+
+**约束**：`postpone` 操作仅更新 `due_at`，同时重置 `status` 为 `active`
+
+#### Todo 额外字段
+
+| 字段 | 类型 | 读写 | 说明 |
+|------|------|------|------|
+| `due_at` | `datetime?` | 可选 | 截止时间；有值时超时标记 `overdue` |
+| `expected_minutes` | `number?` | 可选 | 预期投入时长（分钟，正整数） |
+| `subtasks` | `SubTask[]` | 可选 | 子任务列表，默认 `[]` |
+
+**SubTask 结构**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | `string` | 只读，UUID |
+| `title` | `string` | 子任务标题 |
+| `done` | `boolean` | 是否完成，默认 `false` |
+| `order` | `number` | 排序序号（升序），从 1 开始 |
+
+**Todo 响应示例**
+
+```json
+{
+  "id": "todo_001", "type": "todo", "title": "复习线性代数",
+  "tag_ids": ["tag_study"], "status": "active",
+  "due_at": "2026-04-28T00:00:00Z", "remind_at": "2026-04-27T20:00:00Z",
+  "expected_minutes": 120, "focus_total_seconds": 5400,
+  "subtasks": [
+    { "id": "sub_001", "title": "第一章例题", "done": true,  "order": 1 },
+    { "id": "sub_002", "title": "第二章习题", "done": false, "order": 2 }
+  ],
+  "created_at": "2026-04-20T10:00:00Z", "updated_at": "2026-04-21T18:30:00Z"
+}
+```
+
+#### 状态流转
+
+```
+         active
+         ├── 手动 complete → completed
+         ├── 手动 cancel   → cancelled
+         └── 超出 due_at / end_at → overdue
+                           └── postpone / snooze → active（due_at 更新）
+```
+
+---
+
+### 任务接口详情
+
+#### 创建任务 `POST /tasks`
+
+```json
+// block
+{ "type": "block", "title": "上课", "tag_ids": [], "start_at": "2026-04-07T09:00:00Z", "end_at": "2026-04-07T10:30:00Z", "remind_at": "2026-04-07T08:45:00Z" }
+// ddl
+{ "type": "ddl", "title": "交作业", "tag_ids": [], "due_at": "2026-04-08T16:00:00Z" }
+// todo
+{ "type": "todo", "title": "复习线代", "expected_minutes": 120, "subtasks": [{ "title": "第一章例题", "order": 1 }] }
+```
+
+#### 获取任务列表 `GET /tasks`
+
+| 参数 | 说明 |
+|------|------|
+| `type` | `block \| ddl \| todo`（可选） |
+| `q` | 关键词，对 `title` 模糊匹配 |
+| `tag_ids` | 多标签 AND 过滤，逗号分隔 |
+| `status` | `active \| completed \| cancelled \| overdue` |
+| `sort` | `due_at_asc/desc`、`start_at_asc/desc`、`spent_desc`、`created_at_asc/desc` |
+| `page` / `page_size` | 分页（默认 1 / 20，上限 100） |
+
+**默认排序**：ddl → `due_at_asc`；block → `start_at_asc`；todo → `last_activity_at` 降序；混合 → `created_at_desc`
+
+**Resp**：`{ "data": { "items": [...], "page": 1, "page_size": 20, "total": 123 } }`
+
+#### 其他任务操作
+
+| 操作 | Method & URL | Body |
+|------|-------------|------|
+| 获取详情 | `GET /tasks/{id}` | — |
+| 更新 | `PATCH /tasks/{id}` | `title/description/tag_ids/remind_at` 及类型相关字段 |
+| 删除 | `DELETE /tasks/{id}` | — |
+| 标记完成 | `POST /tasks/{id}/complete` | — |
+| 取消 | `POST /tasks/{id}/cancel` | — |
+| 稍后 | `POST /tasks/{id}/snooze` | `{ "until": "2026-04-07T12:00:00Z" }` |
+| 延期 | `POST /tasks/{id}/postpone` | `{ "due_at": "2026-04-08T16:00:00Z" }` |
+
+---
+
+### 子任务接口
+
+| 操作 | Method & URL | Body |
+|------|-------------|------|
+| 新增 | `POST /tasks/{id}/subtasks` | `{ "title": "...", "order": 1 }` |
+| 更新 | `PATCH /subtasks/{id}` | `{ "done": true }` |
+| 删除 | `DELETE /subtasks/{id}` | — |
+
+---
+
+### 首页接口
+
+- **GET** `/home/upcoming`：今天+明天的 block（按 `start_at`）与 ddl（按 `due_at`）合并排序；Query：`from`、`to`
+- **GET** `/home/recent-todos`：最近使用的 Todo 列表；Query：`limit=50`
+
+---
+
+### 番茄钟接口
+
+#### 开始专注 `POST /focus-sessions`
+
+```json
+{ "task_id": "...", "planned_seconds": 1500, "noise_id": "rain_01" }
+```
+
+#### 结束专注 `POST /focus-sessions/{id}/stop`
+
+```json
+{ "ended_at": "2026-04-07T09:25:00Z", "reason": "manual" }
+```
+
+`reason` 可选值：`manual` / `app_killed` / `timeout`
+
+#### 获取任务专注统计 `GET /tasks/{id}/focus-summary`
+
+Query：`from` / `to`（可选）
+
+---
+
+### 统计接口
+
+#### 本周任务统计 `GET /stats/tasks/weekly`
+
+Query：`week_start=2026-04-06`（可选，默认本周周一）
+
+**Resp**：`{ "data": { "completed": 12, "pending": 7, "cancelled": 1, "overdue": 2, "top_tag": { "tag_id": "...", "name": "学习", "count": 6 } } }`
+
+#### 每日按标签专注统计 `GET /stats/focus/daily-by-tag`
+
+Query：`from` / `to`
+
+**Resp**：`{ "data": [{ "date": "2026-04-07", "tags": [{ "tag_id": "...", "seconds": 3600 }] }] }`
+
+---
+
+### 日历接口 `GET /calendar/events`
+
+| 参数 | 说明 |
+|------|------|
+| `view` | `day \| week \| month` |
+| `anchor` | 视图锚点日期，如 `2026-04-07` |
+| `tz` | 时区（可选），如 `Asia/Shanghai` |
+
+**Resp 事件结构**：`{ "id", "source": "task", "type", "title", "start_at", "end_at", "tag_ids", "all_day"? }`
+
+---
+
+### 任务提醒说明
+
+`remind_at` 字段由 API 在创建/更新任务时返回；**客户端**收到任务后自行调度/取消本地闹钟（`AlarmManager`）。任务完成、删除、延期、稍后后客户端须同步取消或重排对应闹钟。服务端不提供 FCM / 设备注册 / 推送触发等接口。
 
 ---
 
@@ -269,4 +511,132 @@ Agent 基于 **LangGraph** 工作流引擎，通过 LLM 进行意图识别与工
 | `subtasks` | Todo 子任务 |
 | `focus_sessions` | 番茄钟专注记录 |
 
-> 详细字段定义、索引设计见 [db.md](db.md)
+### 详细字段定义
+
+**设计原则**
+- 时间统一使用 UTC（`timestamptz`），展示由客户端按时区转换
+- 按 `user_id` 多租户隔离
+- "超时 overdue"不落库，通过 `due_at < now AND status=active` 计算；如需加速统计可加冗余字段并用定时任务维护
+
+#### `users`
+
+| 字段 | 说明 |
+|------|------|
+| `id` | PK, UUID |
+| `email` | 唯一，登录邮箱 |
+| `password_hash` | 密码哈希 |
+| `name` | 显示名称 |
+| `created_at` / `updated_at` | 创建/更新时间 |
+
+#### `tags`
+
+| 字段 | 说明 |
+|------|------|
+| `id` | PK, UUID |
+| `user_id` | FK → users.id，indexed |
+| `name` | 标签名 |
+| `color` | 颜色值（如 `#RRGGBB`） |
+| `created_at` / `updated_at` | — |
+
+**约束**：`(user_id, name)` 唯一（防止同用户重名）
+
+#### `tasks`（统一任务母表）
+
+| 字段 | 说明 |
+|------|------|
+| `id` | PK, UUID |
+| `user_id` | FK → users.id，indexed |
+| `type` | enum: block/ddl/todo，indexed |
+| `title` | 任务标题 |
+| `description` | 备注（nullable） |
+| `status` | enum: active/completed/cancelled，indexed |
+| `created_at` / `updated_at` | — |
+| `completed_at` | 完成时间（nullable） |
+| `cancelled_at` | 取消时间（nullable） |
+| `last_activity_at` | 最近活动时间，indexed；用于最近 Todo 排序 |
+| `snoozed_until` | 稍后时间，nullable，indexed |
+| `remind_at` | 提醒时间，nullable，indexed；客户端据此注册本地闹钟 |
+
+#### `task_block`
+
+| 字段 | 说明 |
+|------|------|
+| `task_id` | PK, FK → tasks.id |
+| `start_at` | indexed |
+| `end_at` | indexed |
+
+**约束**：`end_at > start_at`
+
+#### `task_ddl`
+
+| 字段 | 说明 |
+|------|------|
+| `task_id` | PK, FK → tasks.id |
+| `due_at` | indexed |
+
+#### `task_todo`
+
+| 字段 | 说明 |
+|------|------|
+| `task_id` | PK, FK → tasks.id |
+| `expected_minutes` | 预期时长（nullable） |
+| `due_at` | 可选截止时间，nullable，indexed |
+
+#### `task_tags`（任务-标签多对多）
+
+| 字段 | 说明 |
+|------|------|
+| `task_id` | FK → tasks.id |
+| `tag_id` | FK → tags.id |
+
+**PK**：`(task_id, tag_id)`；**额外索引**：`(tag_id, task_id)`（按标签筛选任务）
+
+#### `subtasks`（Todo 子任务）
+
+| 字段 | 说明 |
+|------|------|
+| `id` | PK, UUID |
+| `task_id` | FK → tasks.id，indexed；仅关联 type=todo 的任务 |
+| `title` | 子任务标题 |
+| `done` | bool，indexed |
+| `order` | int，显示顺序 |
+| `created_at` / `updated_at` | — |
+| `done_at` | 完成时间（nullable） |
+
+#### `focus_sessions`（番茄钟专注记录）
+
+| 字段 | 说明 |
+|------|------|
+| `id` | PK, UUID |
+| `user_id` | FK → users.id，indexed |
+| `task_id` | FK → tasks.id，indexed |
+| `status` | enum: running/stopped，indexed |
+| `started_at` | indexed |
+| `ended_at` | nullable，indexed |
+| `planned_seconds` | 计划时长（秒） |
+| `actual_seconds` | 实际时长，nullable；停止时计算写入 |
+| `stop_reason` | enum: manual/app_killed/timeout，nullable |
+| `noise_id` | 白噪音预设标识（nullable） |
+
+> 每天按标签专注统计可由 `focus_sessions` join `task_tags` 聚合得到；数据量大时可做增量汇总表 `focus_daily_tag_stats(user_id, date, tag_id, seconds)`。
+
+---
+
+### 关键查询与索引建议
+
+#### 首页「今天+明天任务」
+
+- block：按 `task_block.start_at` 范围查询
+- ddl：按 `task_ddl.due_at` 范围查询
+- 建议索引：`task_block(start_at)`、`task_block(end_at)`、`task_ddl(due_at)`、`tasks(user_id, status, type)`、`tasks(user_id, last_activity_at)`
+
+#### 统计（周任务数 + 每日按标签专注柱状图）
+
+- **直接聚合（中小规模）**：按 `focus_sessions.started_at` 日期分桶，再 join 标签聚合
+- **可选汇总表（大规模）**：`focus_daily_tag_stats(user_id, date, tag_id, seconds)`；由 session stop 时增量更新，或定时任务重算
+
+#### 任务列表筛选/排序
+
+- 标签筛选：走 `task_tags(tag_id, task_id)`
+- ddl 按截止时间排序：走 `task_ddl(due_at)`
+- todo 按已花费时长排序：维护 `tasks.focus_total_seconds` 冗余字段（每次 session stop 增量更新）

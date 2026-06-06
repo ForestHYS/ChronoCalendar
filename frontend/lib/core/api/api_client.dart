@@ -20,7 +20,9 @@ class ApiClient {
   }
 
   Map<String, String> _headers({bool withAuth = true}) {
-    final h = <String, String>{'Content-Type': 'application/json; charset=utf-8'};
+    final h = <String, String>{
+      'Content-Type': 'application/json; charset=utf-8',
+    };
     if (withAuth) {
       final t = _prefs.getString(AuthTokenStorage.accessTokenKey);
       if (t != null && t.isNotEmpty) {
@@ -91,7 +93,7 @@ class ApiClient {
           case 'PATCH':
             return await http.patch(uri, headers: headers, body: encoded);
           case 'DELETE':
-            return await http.delete(uri, headers: headers);
+            return await http.delete(uri, headers: headers, body: encoded);
           default:
             throw ApiException('不支持的 HTTP 方法: $method');
         }
@@ -120,7 +122,8 @@ class ApiClient {
     if (resp.body.isNotEmpty) {
       try {
         final decoded = jsonDecode(resp.body);
-        if (decoded is Map<String, dynamic> && decoded['error'] is Map<String, dynamic>) {
+        if (decoded is Map<String, dynamic> &&
+            decoded['error'] is Map<String, dynamic>) {
           final err = decoded['error'] as Map<String, dynamic>;
           throw ApiException(
             err['message'] as String? ?? '请求失败',

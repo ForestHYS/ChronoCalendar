@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -5,6 +7,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/api/api_client.dart';
 import '../core/notifications/notification_service.dart';
 import '../core/notifications/reminder_scheduler.dart';
+import '../core/voice/cloud_speech_recognizer_service.dart';
+import '../core/voice/cloud_speech_synthesizer_service.dart';
+import '../core/voice/speech_recognizer_service.dart';
+import '../core/voice/speech_synthesizer_service.dart';
+import '../core/voice/system_speech_recognizer_service.dart';
+import '../core/voice/system_speech_synthesizer_service.dart';
 import 'app_settings_repository.dart';
 import 'ai_settings_repository.dart';
 import 'auth_repository.dart';
@@ -12,6 +20,21 @@ import 'agent_repository.dart';
 import 'agent_session_store.dart';
 import 'pomodoro_settings_repository.dart';
 import 'task_repository.dart';
+
+void _ignoreDisposeFuture(String label, Future<void> Function() action) {
+  try {
+    unawaited(
+      action().then(
+        (_) {},
+        onError: (Object e, StackTrace st) {
+          debugPrint('$label failed in onDispose: $e\n$st');
+        },
+      ),
+    );
+  } catch (e, st) {
+    debugPrint('$label failed in onDispose: $e\n$st');
+  }
+}
 
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
   throw UnimplementedError('Override in main()');
@@ -22,16 +45,22 @@ final apiClientProvider = Provider<ApiClient>((ref) {
 });
 
 final authRepositoryProvider = Provider<AuthRepository>((ref) {
-  return AuthRepository(ref.watch(sharedPreferencesProvider), ref.watch(apiClientProvider));
+  return AuthRepository(
+    ref.watch(sharedPreferencesProvider),
+    ref.watch(apiClientProvider),
+  );
 });
 
-final pomodoroSettingsRepositoryProvider = Provider<PomodoroSettingsRepository>((ref) {
-  return PomodoroSettingsRepository(ref.watch(sharedPreferencesProvider));
-});
+final pomodoroSettingsRepositoryProvider = Provider<PomodoroSettingsRepository>(
+  (ref) {
+    return PomodoroSettingsRepository(ref.watch(sharedPreferencesProvider));
+  },
+);
 
-final appSettingsRepositoryProvider = ChangeNotifierProvider<AppSettingsRepository>((ref) {
-  return AppSettingsRepository(ref.watch(sharedPreferencesProvider));
-});
+final appSettingsRepositoryProvider =
+    ChangeNotifierProvider<AppSettingsRepository>((ref) {
+      return AppSettingsRepository(ref.watch(sharedPreferencesProvider));
+    });
 
 final taskRepositoryProvider = ChangeNotifierProvider<TaskRepository>((ref) {
   return TaskRepository(ref.watch(apiClientProvider));
@@ -47,6 +76,36 @@ final agentSessionStoreProvider = Provider<AgentSessionStore>((ref) {
 
 final aiSettingsRepositoryProvider = Provider<AiSettingsRepository>((ref) {
   return AiSettingsRepository(ref.watch(apiClientProvider));
+});
+
+final speechRecognizerServiceProvider = Provider<SpeechRecognizerService>((
+  ref,
+) {
+  final settings = ref.watch(appSettingsRepositoryProvider);
+  final service = settings.agentAsrProvider == 'local'
+      ? SystemSpeechRecognizerService()
+      : CloudSpeechRecognizerService(ref.watch(apiClientProvider));
+  ref.onDispose(() {
+    _ignoreDisposeFuture('speechRecognizer.cancel()', service.cancel);
+  });
+  return service;
+});
+
+final speechSynthesizerServiceProvider = Provider<SpeechSynthesizerService>((
+  ref,
+) {
+  final settings = ref.watch(appSettingsRepositoryProvider);
+  final service = settings.agentTtsProvider == 'local'
+      ? SystemSpeechSynthesizerService()
+      : CloudSpeechSynthesizerService(ref.watch(apiClientProvider));
+  ref.onDispose(() {
+    if (service is CloudSpeechSynthesizerService) {
+      _ignoreDisposeFuture('speechSynthesizer.dispose()', service.dispose);
+    } else {
+      _ignoreDisposeFuture('speechSynthesizer.stop()', service.stop);
+    }
+  });
+  return service;
 });
 
 /// 全局唯一的提醒调度器。由 [CalendarApp] 在登录态变化时 start/stop。
@@ -74,7 +133,13 @@ final reminderSchedulerProvider = Provider<ReminderScheduler>((ref) {
 });
 
 class AuthNotifier extends ChangeNotifier {
-  AuthNotifier(this._repo, this._taskRepo, this._appSettings, this._agentStore) {
+  AuthNotifier(
+    this._repo,
+    this._taskRepo,
+    this._appSettings,
+    this._agentStore,
+  ) {
+    _appSettings.setCurrentUserEmail(_repo.savedEmail);
     _sync();
   }
 
@@ -92,6 +157,7 @@ class AuthNotifier extends ChangeNotifier {
 
   Future<void> login(String email, String password) async {
     await _repo.login(email, password);
+    _appSettings.setCurrentUserEmail(_repo.savedEmail);
     _sync();
     notifyListeners();
     try {
@@ -105,6 +171,7 @@ class AuthNotifier extends ChangeNotifier {
     } catch (e) {
       _taskRepo.clearLocalCache();
       await _repo.logout();
+      _appSettings.setCurrentUserEmail(null);
       _sync();
       notifyListeners();
       rethrow;
@@ -117,6 +184,7 @@ class AuthNotifier extends ChangeNotifier {
     String? name,
   }) async {
     await _repo.register(email: email, password: password, name: name);
+    _appSettings.setCurrentUserEmail(_repo.savedEmail);
     _sync();
     notifyListeners();
     try {
@@ -130,6 +198,7 @@ class AuthNotifier extends ChangeNotifier {
     } catch (e) {
       _taskRepo.clearLocalCache();
       await _repo.logout();
+      _appSettings.setCurrentUserEmail(null);
       _sync();
       notifyListeners();
       rethrow;
@@ -141,6 +210,7 @@ class AuthNotifier extends ChangeNotifier {
     _taskRepo.clearLocalCache();
     await _agentStore.clearForUser(email);
     await _repo.logout();
+    _appSettings.setCurrentUserEmail(null);
     _sync();
     notifyListeners();
   }
@@ -149,8 +219,21 @@ class AuthNotifier extends ChangeNotifier {
     await _repo.updateNickname(nickname);
   }
 
-  Future<void> changePassword({required String current, required String next}) async {
+  Future<void> changePassword({
+    required String current,
+    required String next,
+  }) async {
     await _repo.changePassword(current: current, next: next);
+  }
+
+  Future<void> deleteAccount({required String currentPassword}) async {
+    final email = _repo.savedEmail;
+    _taskRepo.clearLocalCache();
+    await _agentStore.clearForUser(email);
+    await _repo.deleteAccount(currentPassword: currentPassword);
+    _appSettings.setCurrentUserEmail(null);
+    _sync();
+    notifyListeners();
   }
 }
 

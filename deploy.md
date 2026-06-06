@@ -1,133 +1,104 @@
 # ChronoCalendar 部署说明
 
-本文档使用 UTF-8 编码，面向当前仓库的实际部署方式编写。
+本文按当前仓库的新版本编写，重点适配你的实际限制：服务器不能登录 Git 再 `clone`，只能由你在本地打包后手动 SFTP 上传。
 
-当前后端部署结构：
-
-- `backend`：Django API，容器内使用 Gunicorn 提供服务
-- `db`：PostgreSQL
-- `nginx`：反向代理，转发到 Django
-- `docker-compose.yml`：统一编排三个服务
-- Cloudflare：DNS 解析和 HTTPS 入口
-
-本文默认你的后端域名是：
+默认后端域名：
 
 ```text
 https://thuse.skyislimit.uno
 ```
 
-如果后续域名变化，把文中的域名替换成你的真实域名即可。
+如果域名变化，把文档里的 `thuse.skyislimit.uno` 替换成真实域名即可。前端 `API_BASE_URL` 只写域名根地址，不要带 `/api/v1`。
 
-## 1. 部署目标和现状
+## 1. 当前部署形态
 
-你的目标是：
-
-1. 云服务器上运行 Django、PostgreSQL 和 Nginx
-2. Cloudflare 解析域名到服务器公网 IP
-3. Cloudflare SSL/TLS 模式使用 `Full`
-4. 前端 APK 通过 HTTPS 访问后端
-
-当前仓库里已经具备：
-
-- Dockerfile
-- `docker-compose.yml`
-- Gunicorn 启动方式
-- PostgreSQL 容器
-- Nginx 80 端口反向代理
-- `.env.example`
-
-当前仓库里还没有真正完成的部分：
-
-- Nginx 的 443 TLS 配置
-- `docker-compose.yml` 对 443 端口和证书目录的挂载
-- 源站证书文件
-
-这意味着：
-
-- 如果不补 443 配置，Cloudflare `Full` 模式无法正常工作
-- 你不能只改 Cloudflare 面板设置，还必须同步改服务器配置
-
-## 2. 需要上传到服务器的文件
-
-推荐做法：直接上传整个仓库，或者在服务器上 `git clone`。
-
-如果你只打算上传后端部署所需文件，至少要包含这些内容：
+仓库根目录已有 Docker 部署文件：
 
 ```text
-backend/
-deploy/
 docker-compose.yml
+backend/Dockerfile
+backend/docker/entrypoint.sh
+deploy/nginx/chronocalendar.conf
 .env.example
-deploy.md
 ```
 
-其中：
-
-- `backend/`：Django 源码、`requirements.txt`、`Dockerfile`
-- `backend/docker/entrypoint.sh`：容器启动时自动迁移数据库和收集静态文件
-- `deploy/nginx/chronocalendar.conf`：Nginx 反向代理配置
-- `docker-compose.yml`：定义 `db`、`backend`、`nginx`
-- `.env.example`：生产环境变量模板
-
-不建议上传这些内容：
+`docker compose` 会启动三个服务：
 
 ```text
-frontend/
-demo/
-temp/
-.venv/
-backend/db.sqlite3
-backend/staticfiles/
+db       PostgreSQL 16
+backend  Django + Gunicorn，容器内监听 8000
+nginx    容器 Nginx，当前默认只映射服务器 80 端口
 ```
 
-原因：
-
-- `frontend/` 对服务器部署后端不是必需
-- `db.sqlite3` 是本地开发库，不应该作为正式生产库
-- `staticfiles/` 会由容器启动时自动收集生成
-- `.venv/` 是本地虚拟环境，容器部署不需要
-
-## 3. Cloudflare 配置
-
-Cloudflare 中应至少存在一条 DNS 记录：
+后端接口全部在：
 
 ```text
-类型：A
-名称：thuse
-内容：你的服务器公网 IP
-代理状态：已代理（橙色云朵）
+/api/v1/
 ```
 
-如果你的完整域名是 `thuse.skyislimit.uno`，上面这种配置是合理的。
-
-Cloudflare 的 SSL/TLS 模式使用：
+健康检查：
 
 ```text
-Full
+/healthz/
 ```
 
-`Full` 的含义是：
+容器启动时 `backend/docker/entrypoint.sh` 会自动执行：
 
-- 浏览器到 Cloudflare 使用 HTTPS
-- Cloudflare 到你的源站服务器也使用 HTTPS
+```text
+python manage.py migrate --noinput
+python manage.py collectstatic --noinput
+gunicorn config.wsgi:application
+```
 
-所以你的服务器必须：
+## 2. 本地打包命令
 
-- 对外开放 `443/tcp`
-- Nginx 监听 `443`
-- Nginx 挂载证书和私钥
+在 Windows PowerShell 中进入项目根目录：
 
-如果服务器没有这些配置，Cloudflare 虽然能解析到你的服务器，但访问时会报错。
+```powershell
+cd E:\Codes\android\final_hw\ChronoCalendar
+```
 
-## 4. 服务器准备
+执行下面这段命令，会生成一个适合 SFTP 上传的 zip 包，只包含后端部署必要文件，不包含 `frontend/`、`demo/`、`.git/`、本地数据库、虚拟环境和证书私钥目录。
 
-本文假设你的服务器系统是 Ubuntu 或 Debian。
+```powershell
+$ErrorActionPreference = "Stop"
+$zip = "ChronoCalendar-deploy-$(Get-Date -Format yyyyMMdd-HHmmss).zip"
+$stage = Join-Path $env:TEMP "ChronoCalendar-deploy"
+Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $stage | Out-Null
 
-安装 Docker 和 Docker Compose：
+robocopy backend (Join-Path $stage "backend") /E /XD .venv venv env __pycache__ staticfiles media /XF db.sqlite3 *.pyc *.pyo *.pyd *.sqlite3-journal | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "robocopy backend failed: $LASTEXITCODE" }
+
+robocopy deploy (Join-Path $stage "deploy") /E /XD certs | Out-Null
+if ($LASTEXITCODE -ge 8) { throw "robocopy deploy failed: $LASTEXITCODE" }
+
+Copy-Item -Path @("docker-compose.yml", ".env.example", "deploy.md") -Destination $stage
+Compress-Archive -Path "$stage\*" -DestinationPath $zip -Force
+Write-Host "Created $zip"
+```
+
+生成的文件名类似：
+
+```text
+ChronoCalendar-deploy-20260606-153000.zip
+```
+
+用 SFTP 把这个 zip 上传到服务器，例如：
+
+```text
+~/workspace/thuapp/ChronoCalendar-deploy-20260606-153000.zip
+```
+
+## 3. 服务器首次准备
+
+本文假设服务器是 Ubuntu/Debian，并且你可以通过 SSH 执行命令。
+
+安装 Docker 和 Docker Compose 插件：
 
 ```bash
 sudo apt update
-sudo apt install -y ca-certificates curl
+sudo apt install -y ca-certificates curl unzip
 sudo install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo tee /etc/apt/keyrings/docker.asc > /dev/null
 sudo chmod a+r /etc/apt/keyrings/docker.asc
@@ -143,40 +114,38 @@ docker --version
 docker compose version
 ```
 
-如果你希望普通用户也能直接运行 Docker：
+如果希望当前普通用户直接运行 Docker：
 
 ```bash
 sudo usermod -aG docker $USER
 newgrp docker
 ```
 
-开放端口：
+服务器防火墙或云安全组至少放行：
 
 ```text
 80/tcp
-443/tcp
 ```
 
-如果你有云厂商安全组，也要同步放行 `80` 和 `443`。
+当前仓库的默认 `docker-compose.yml` 只映射 `80:80`。如果你之后自己给源站配置 443，再额外放行 `443/tcp`。
 
-## 5. 上传代码到服务器
+## 4. 上传并解压
 
-你现在本地已经打了一个压缩包 `ChronoCalendar-backend.zip`，这可以直接用。
-
-一种简单做法是：
+服务器上创建部署目录：
 
 ```bash
 mkdir -p ~/workspace/thuapp
 cd ~/workspace/thuapp
 ```
 
-把压缩包上传到这个目录后解压：
+用 SFTP 上传 zip 到这个目录后，解压最新上传的包：
 
 ```bash
-unzip ChronoCalendar-backend.zip
+latest_zip=$(ls -t ChronoCalendar-deploy-*.zip | head -n 1)
+unzip -o "$latest_zip" -d ~/workspace/thuapp
 ```
 
-解压后建议确认这些文件确实存在：
+确认关键文件存在：
 
 ```bash
 ls
@@ -184,36 +153,38 @@ ls backend
 ls deploy/nginx
 ```
 
-如果你用 Git 部署，流程可以改成：
+应该能看到：
 
-```bash
-mkdir -p ~/workspace/thuapp
-cd ~/workspace/thuapp
-git clone <你的仓库地址> .
+```text
+backend/
+deploy/
+docker-compose.yml
+.env.example
+deploy.md
 ```
 
-## 6. 创建 `.env`
+## 5. 创建生产 `.env`
 
-进入项目根目录：
+首次部署时：
 
 ```bash
 cd ~/workspace/thuapp
 cp .env.example .env
-```
-
-编辑文件：
-
-```bash
 nano .env
 ```
 
-建议至少改这些值：
+建议至少配置：
 
 ```text
-DJANGO_SECRET_KEY=<替换成一段随机长字符串>
+DJANGO_SECRET_KEY=<替换成随机长密钥>
 DJANGO_DEBUG=false
-DJANGO_ALLOWED_HOSTS=thuse.skyislimit.uno
-DJANGO_CSRF_TRUSTED_ORIGINS=https://thuse.skyislimit.uno
+DJANGO_ALLOWED_HOSTS=thuse.skyislimit.uno,127.0.0.1,localhost
+DJANGO_CSRF_TRUSTED_ORIGINS=https://thuse.skyislimit.uno,http://127.0.0.1,http://localhost
+DJANGO_SECURE_SSL_REDIRECT=false
+DJANGO_SECURE_HSTS_SECONDS=0
+DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS=false
+DJANGO_SECURE_HSTS_PRELOAD=false
+DJANGO_TIME_ZONE=UTC
 
 CORS_ALLOW_ALL_ORIGINS=false
 CORS_ALLOWED_ORIGINS=https://thuse.skyislimit.uno
@@ -224,189 +195,67 @@ POSTGRES_USER=chronocalendar
 POSTGRES_PASSWORD=<替换成强密码>
 POSTGRES_HOST=db
 POSTGRES_PORT=5432
-
-DJANGO_SECURE_SSL_REDIRECT=false
-DJANGO_SECURE_HSTS_SECONDS=0
-DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS=false
-DJANGO_SECURE_HSTS_PRELOAD=false
 ```
 
-这些变量的作用：
-
-- `DJANGO_SECRET_KEY`
-  Django 的核心密钥，用于签名 session、token 相关安全数据，必须替换，不能继续用示例值
-- `DJANGO_DEBUG`
-  生产环境必须为 `false`
-- `DJANGO_ALLOWED_HOSTS`
-  告诉 Django 允许哪些域名访问，否则可能报 `DisallowedHost`
-- `DJANGO_CSRF_TRUSTED_ORIGINS`
-  告诉 Django 哪些 HTTPS 来源可以安全访问
-- `CORS_ALLOWED_ORIGINS`
-  约束跨域来源，虽然 APK 本身不一定受浏览器 CORS 限制，但保留正确配置更稳妥
-- `POSTGRES_*`
-  PostgreSQL 的数据库名、用户名、密码和容器内连接地址
-- `DJANGO_SECURE_SSL_REDIRECT`
-  是否强制把 HTTP 重定向到 HTTPS
-- `DJANGO_SECURE_HSTS_SECONDS`
-  是否告诉浏览器未来一段时间内只走 HTTPS
-
-生成新的 `DJANGO_SECRET_KEY`：
+生成 `DJANGO_SECRET_KEY`：
 
 ```bash
 docker run --rm python:3.12-slim python -c "import secrets; print(secrets.token_urlsafe(50))"
 ```
 
-现在先把：
+AI 助手说明：
+
+- Agent 的 LLM/ASR/TTS 配置遵循同一优先级：用户个人配置 > 服务器 `.env` 全局默认 > 代码中的缺省值。
+- `.env` 可用于设置全局默认 Base URL、API Key 和模型名；客户端“AI 配置”页保存的是当前账号的覆盖配置。
+- 如果用户没有配置个人 API Key，会回退到 `.env` 中对应的全局 API Key；如果两边都没有 Key，则返回“AI 未配置”，不会让接口 500。
+- 如果 `.env` 中 Base URL 或模型名留空，会继续使用代码中的缺省值。
+- 不要把真实 API Key 写进 `.env.example`、部署文档或仓库。
+
+## 6. HTTPS 与 Cloudflare
+
+当前仓库默认容器 Nginx 只监听并映射 80 端口：
+
+```yaml
+ports:
+  - "80:80"
+```
+
+因此最省事的方式是：
+
+```text
+浏览器/APP -> Cloudflare HTTPS -> 源站服务器 HTTP:80 -> 容器 Nginx -> Django
+```
+
+这种情况下 Cloudflare SSL/TLS 模式可先用 `Flexible`。`.env` 中保持：
 
 ```text
 DJANGO_SECURE_SSL_REDIRECT=false
 DJANGO_SECURE_HSTS_SECONDS=0
 ```
 
-保持为当前值。原因是：在你把 443 和证书真正配好之前，过早强制 HTTPS 会把访问直接重定向到一个还没准备好的入口。
-
-## 7. 为 Cloudflare Full 配置源站 TLS
-
-这是当前部署里最关键的一步。
-
-因为你使用的是 Cloudflare `Full`，所以源站必须有 HTTPS。最简单的方式是使用 Cloudflare Origin Certificate。
-
-### 7.1 在 Cloudflare 创建证书
-
-进入 Cloudflare 面板：
-
-1. 打开 `SSL/TLS`
-2. 进入 `Origin Server`
-3. 点击 `Create Certificate`
-4. Hostnames 填：
+如果你必须使用 Cloudflare `Full` 或 `Full strict`，源站也要提供 HTTPS。那就需要你额外修改：
 
 ```text
-thuse.skyislimit.uno
+docker-compose.yml
+deploy/nginx/chronocalendar.conf
+deploy/certs/origin.pem
+deploy/certs/origin.key
 ```
 
-5. 生成后保存证书和私钥
+当前仓库没有默认启用 443，所以不要只在 Cloudflare 面板切到 `Full`，否则很容易出现 525/526。
 
-### 7.2 在服务器保存证书
+## 7. 启动服务
 
-进入项目目录并创建证书目录：
-
-```bash
-cd ~/workspace/thuapp
-mkdir -p deploy/certs
-```
-
-保存为：
-
-```text
-~/workspace/thuapp/deploy/certs/origin.pem
-~/workspace/thuapp/deploy/certs/origin.key
-```
-
-限制私钥权限：
-
-```bash
-chmod 600 deploy/certs/origin.key
-```
-
-### 7.3 修改 `docker-compose.yml`
-
-当前仓库里的 `nginx` 只映射了 `80:80`，需要增加 `443:443`，并挂载证书目录。
-
-把 `nginx` 这一段改成下面这样：
-
-```yaml
-nginx:
-  image: nginx:1.27-alpine
-  restart: unless-stopped
-  depends_on:
-    - backend
-  ports:
-    - "80:80"
-    - "443:443"
-  volumes:
-    - ./deploy/nginx/chronocalendar.conf:/etc/nginx/conf.d/default.conf:ro
-    - ./deploy/certs:/etc/nginx/certs:ro
-    - staticfiles:/staticfiles:ro
-```
-
-### 7.4 修改 Nginx 配置
-
-当前 `deploy/nginx/chronocalendar.conf` 只有 80 端口配置，需要改成同时支持：
-
-- 80 端口跳转到 HTTPS
-- 443 端口处理真实请求
-
-建议改成：
-
-```nginx
-upstream chronocalendar_backend {
-    server backend:8000;
-}
-
-server {
-    listen 80;
-    server_name thuse.skyislimit.uno;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name thuse.skyislimit.uno;
-
-    ssl_certificate /etc/nginx/certs/origin.pem;
-    ssl_certificate_key /etc/nginx/certs/origin.key;
-
-    client_max_body_size 10m;
-
-    location /static/ {
-        alias /staticfiles/;
-        access_log off;
-        expires 30d;
-    }
-
-    location /healthz/ {
-        proxy_pass http://chronocalendar_backend;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-
-    location / {
-        proxy_pass http://chronocalendar_backend;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-}
-```
-
-## 8. 启动服务
-
-确认 `.env`、证书、`docker-compose.yml`、Nginx 配置都已经准备好后，在项目根目录运行：
+在服务器项目目录运行：
 
 ```bash
 cd ~/workspace/thuapp
 docker compose up -d --build
 ```
 
-这个命令会启动：
+注意 `--build` 要跟在 `up` 后面。不要写成 `docker compose --build`，那会报 `unknown flag: --build`。
 
-- `db`
-- `backend`
-- `nginx`
-
-后端容器启动时会自动执行：
-
-```text
-python manage.py migrate --noinput
-python manage.py collectstatic --noinput
-gunicorn config.wsgi:application
-```
-
-查看容器状态：
+查看状态：
 
 ```bash
 docker compose ps
@@ -415,186 +264,163 @@ docker compose ps
 查看日志：
 
 ```bash
-docker compose logs -f db
 docker compose logs -f backend
 docker compose logs -f nginx
+docker compose logs -f db
 ```
 
-## 9. 首次验证
-
-先在服务器本机验证端口监听：
-
-```bash
-sudo ss -tulpn | grep ':80'
-sudo ss -tulpn | grep ':443'
-```
-
-再验证 Nginx：
+本机验证：
 
 ```bash
 curl http://127.0.0.1/healthz/
-curl -k https://127.0.0.1/healthz/
 ```
 
-预期应该能返回：
+预期返回：
 
 ```json
 {"status": "ok"}
 ```
 
-然后从服务器外部或你本机验证：
+外部验证：
 
 ```bash
 curl https://thuse.skyislimit.uno/healthz/
 ```
 
-再测 API 路径：
+如果 Cloudflare 还没配好，也可以先直接测服务器公网 IP 的 80 端口。
+
+## 8. 更新部署
+
+以后每次更新代码：
+
+1. 在本地重新执行第 2 节的 PowerShell 打包命令。
+2. 用 SFTP 把新的 zip 上传到 `~/workspace/thuapp/`。
+3. 在服务器解压覆盖。
+4. 重新构建并启动容器。
+
+服务器命令：
 
 ```bash
-curl https://thuse.skyislimit.uno/api/v1/
+cd ~/workspace/thuapp
+latest_zip=$(ls -t ChronoCalendar-deploy-*.zip | head -n 1)
+unzip -o "$latest_zip" -d ~/workspace/thuapp
+docker compose up -d --build
+docker compose ps
+curl http://127.0.0.1/healthz/
 ```
 
-这里返回 `404` 或认证失败不一定有问题，关键是请求已经通到 Django，而不是 Cloudflare 报错或 Nginx 502。
+注意：
 
-## 10. 开启 Django HTTPS 安全项
+- `.env` 不在打包文件里，更新代码不会覆盖服务器上的 `.env`。
+- PostgreSQL 数据保存在 Docker volume `postgres_data`，普通更新不会清空数据。
+- 不要在已有正式数据时执行 `docker compose down -v`，那会删除数据库卷。
 
-当你确认下面这条已经稳定可访问：
+## 9. 前端 APK 打包
+
+后端域名可访问后，在本地构建 APK。
+
+```powershell
+cd E:\Codes\android\final_hw\ChronoCalendar\frontend
+D:\flutter\flutter\bin\flutter.bat clean
+D:\flutter\flutter\bin\flutter.bat pub get
+D:\flutter\flutter\bin\flutter.bat build apk --release --dart-define=API_BASE_URL=https://thuse.skyislimit.uno
+```
+
+生成位置：
 
 ```text
-https://thuse.skyislimit.uno/healthz/
+frontend/build/app/outputs/flutter-apk/app-release.apk
 ```
 
-再把 `.env` 中这几个值改成：
+如果后端还只能用 HTTP 测试，`API_BASE_URL` 可以临时写成：
 
 ```text
-DJANGO_SECURE_SSL_REDIRECT=true
-DJANGO_SECURE_HSTS_SECONDS=31536000
-DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS=false
-DJANGO_SECURE_HSTS_PRELOAD=false
+http://你的服务器IP
 ```
 
-然后重启服务：
+正式给用户使用时建议走 HTTPS 域名。
 
-```bash
-docker compose up -d
-```
+## 10. 常见问题
 
-这样 Django 会更严格地按照 HTTPS 方式工作。
+### 10.1 502 Bad Gateway
 
-## 11. 常见问题
-
-### 11.1 Cloudflare 返回 521
-
-通常表示 Cloudflare 连不上源站。
+Nginx 能访问，但后端容器没正常提供 8000。
 
 检查：
 
 ```bash
 docker compose ps
-sudo ss -tulpn | grep ':443'
-```
-
-重点确认：
-
-- 服务器 443 端口是否监听
-- 云安全组是否放行 443
-- Nginx 容器是否正常启动
-
-### 11.2 Cloudflare 返回 525 或 526
-
-通常表示 TLS 握手或证书有问题。
-
-检查：
-
-- `origin.pem` 和 `origin.key` 是否对应
-- Nginx 配置中的证书路径是否正确
-- Cloudflare 面板中域名是否和证书中的 Hostname 一致
-
-### 11.3 返回 502 Bad Gateway
-
-通常表示 Nginx 正常，但后端服务没有正常提供 8000 端口。
-
-检查：
-
-```bash
 docker compose logs -f backend
 ```
 
-重点看：
+重点看数据库连接、migrations、环境变量是否报错。
 
-- 数据库连接失败
-- migrations 执行失败
-- `.env` 缺失关键变量
-
-### 11.4 报 `DisallowedHost`
-
-说明 `DJANGO_ALLOWED_HOSTS` 配置不对。
-
-应改成：
+如果日志里是：
 
 ```text
-DJANGO_ALLOWED_HOSTS=thuse.skyislimit.uno
+exec /app/docker/entrypoint.sh: no such file or directory
 ```
 
-改完后重启：
+通常是 Windows 打包后 shell 脚本带了 CRLF 行尾，Linux 容器执行 shebang 时会失败。当前 Dockerfile 已经在构建时自动清理 `backend/docker/entrypoint.sh` 行尾。重新用第 2 节命令打包、SFTP 上传，然后执行：
+
+```bash
+cd ~/workspace/thuapp
+latest_zip=$(ls -t ChronoCalendar-deploy-*.zip | head -n 1)
+unzip -o "$latest_zip" -d ~/workspace/thuapp
+docker compose up -d --build
+docker compose logs -f backend
+```
+
+等 backend 不再重启后，再测：
+
+```bash
+curl http://127.0.0.1/healthz/
+```
+
+### 10.2 DisallowedHost
+
+`DJANGO_ALLOWED_HOSTS` 没有包含当前访问域名。
+
+修改 `.env`：
+
+```text
+DJANGO_ALLOWED_HOSTS=thuse.skyislimit.uno,127.0.0.1,localhost
+```
+
+然后重启：
 
 ```bash
 docker compose up -d
 ```
 
-### 11.5 改了数据库密码后数据库起不来
+### 10.3 Cloudflare 521
 
-如果 PostgreSQL 卷已经初始化过，单独改 `.env` 中的 `POSTGRES_PASSWORD` 不会自动改旧数据库里的密码。
+Cloudflare 连不上源站。
 
-如果你还没有正式数据，可以删除卷重建：
+检查：
+
+```bash
+docker compose ps
+sudo ss -tulpn | grep ':80'
+```
+
+确认服务器安全组、防火墙和容器端口映射都放行了 80。
+
+### 10.4 Cloudflare 525/526
+
+通常是你把 Cloudflare 切到了 `Full` 或 `Full strict`，但源站没有正确配置 HTTPS 证书。
+
+当前默认 compose 只支持 80。如果暂时不配置源站证书，把 Cloudflare SSL/TLS 模式调回 `Flexible`。
+
+### 10.5 修改 PostgreSQL 密码后数据库起不来
+
+PostgreSQL volume 初始化后，单独改 `.env` 的 `POSTGRES_PASSWORD` 不会自动修改旧数据库里的密码。
+
+如果还没有正式数据，可以删除卷重建：
 
 ```bash
 docker compose down -v
 docker compose up -d --build
 ```
 
-这会删除数据库内容，已有正式数据时不要这样做。
-
-## 12. 更新部署
-
-以后更新后端时，进入目录执行：
-
-```bash
-cd ~/workspace/thuapp
-docker compose up -d --build
-```
-
-如果你使用 Git 管理代码，则更新步骤是：
-
-```bash
-cd ~/workspace/thuapp
-git pull
-docker compose up -d --build
-```
-
-更新后再次检查：
-
-```bash
-docker compose ps
-curl -k https://127.0.0.1/healthz/
-curl https://thuse.skyislimit.uno/healthz/
-```
-
-## 13. 前端 APK 打包
-
-当后端 HTTPS 验证通过后，再打包前端 APK。
-
-注意：`API_BASE_URL` 只写根地址，不带 `/api/v1`。
-
-```powershell
-cd frontend
-flutter clean
-flutter pub get
-flutter build apk --release --dart-define=API_BASE_URL=https://thuse.skyislimit.uno
-```
-
-生成的 APK 通常在：
-
-```text
-frontend/build/app/outputs/flutter-apk/app-release.apk
-```
+已有正式数据时不要这样做。
