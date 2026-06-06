@@ -32,6 +32,7 @@ class AgentRepository {
         'text': text,
         // ignore: use_null_aware_elements
         if (clientContext != null) 'client_context': clientContext,
+        // ignore: use_null_aware_elements
         if (interaction != null) 'interaction': interaction,
       },
       auth: true,
@@ -100,15 +101,19 @@ class AgentRepository {
     List<Map<String, dynamic>> tasks, {
     Map<String, dynamic>? clientContext,
     String? sourceMessageId,
+    List<int>? selectedIndices,
   }) async {
     final data = await _api.request(
       'POST',
       'agent/confirm-plan/',
       body: {
         'tasks': tasks,
+        // ignore: use_null_aware_elements
         if (clientContext != null) 'client_context': clientContext,
         if (sourceMessageId != null && sourceMessageId.isNotEmpty)
           'source_message_id': sourceMessageId,
+        // ignore: use_null_aware_elements
+        if (selectedIndices != null) 'selected_indices': selectedIndices,
       },
       auth: true,
     );

@@ -399,6 +399,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     required Map<String, dynamic> interaction,
   }) async {
     if (_sending) return;
+    await _stopSpeech();
     setState(() {
       _sending = true;
       _items.add(_ChatItem.user(userLabel));
@@ -465,6 +466,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   Future<void> _send() async {
     final text = _inputC.text.trim();
     if (text.isEmpty || _sending) return;
+    await _stopSpeech();
     setState(() {
       _sending = true;
       _items.add(_ChatItem.user(text));
@@ -509,6 +511,8 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   }
 
   Future<void> _startNewSession() async {
+    await _stopSpeech();
+    if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -529,7 +533,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     if (ok != true || !mounted) return;
     // 创建新会话
     try {
-      await _stopSpeech();
       final id = await ref.read(agentRepositoryProvider).createSession();
       await _sessionStore.clearForUser(_userEmail);
       await _sessionStore.setLastSessionId(_userEmail, id);
@@ -615,9 +618,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                             onOpenEditor: _openEditorFromDraft,
                             onFollowUp: _appendAssistantPayload,
                             onSpeak: _speakText,
-                            onPlanConfirmed: (messageId) {
+                            onStopSpeech: _stopSpeech,
+                            onPlanConfirmed: (messageId, selected) {
                               _markAssistantPayload(messageId, {
                                 'plan_confirmed': true,
+                                _kPlanSelectedIndices: selected,
                               });
                             },
                             onPlanSelectionChanged: (messageId, selected) {
@@ -694,6 +699,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   }
 
   void _openEditorFromDraft(Map<String, dynamic> draft) {
+    unawaited(_stopSpeech());
     context.push('/task/new', extra: {'agent_draft': draft});
   }
 
@@ -770,6 +776,7 @@ class _AssistantCard extends ConsumerStatefulWidget {
     required this.onFollowUp,
     required this.onSendInteraction,
     required this.onSpeak,
+    required this.onStopSpeech,
     this.messageId,
     this.initialSubmitted = false,
     this.onPlanConfirmed,
@@ -781,12 +788,13 @@ class _AssistantCard extends ConsumerStatefulWidget {
   final void Function(Map<String, dynamic> draft) onOpenEditor;
   final void Function(Map<String, dynamic> payload) onFollowUp;
   final Future<void> Function(String text) onSpeak;
+  final Future<void> Function() onStopSpeech;
   final Future<void> Function({
     required String userLabel,
     required Map<String, dynamic> interaction,
   })
   onSendInteraction;
-  final void Function(String messageId)? onPlanConfirmed;
+  final void Function(String messageId, List<int> selected)? onPlanConfirmed;
   final void Function(String messageId, List<int> selected)?
   onPlanSelectionChanged;
   final void Function(String messageId, Map<String, dynamic> patch)?
@@ -888,6 +896,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
           text: text,
           items: items,
           onSpeak: widget.onSpeak,
+          onStopSpeech: widget.onStopSpeech,
         );
       }
       return _assistantTextCard(text);
@@ -941,6 +950,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                               ? null
                               : () async {
                                   try {
+                                    await widget.onStopSpeech();
                                     final r = await ref
                                         .read(agentRepositoryProvider)
                                         .rejectApproval(approvalId);
@@ -966,6 +976,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                               ? null
                               : () async {
                                   try {
+                                    await widget.onStopSpeech();
                                     final r = await ref
                                         .read(agentRepositoryProvider)
                                         .approveApproval(approvalId);
@@ -1004,6 +1015,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
         text: text,
         items: items,
         onSpeak: widget.onSpeak,
+        onStopSpeech: widget.onStopSpeech,
       );
     }
 
@@ -1049,6 +1061,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
         onPlanConfirmed: widget.onPlanConfirmed,
         onSelectionChanged: widget.onPlanSelectionChanged,
         onSpeak: widget.onSpeak,
+        onStopSpeech: widget.onStopSpeech,
       );
     }
 
@@ -1148,11 +1161,13 @@ class _AgentTaskListCard extends ConsumerWidget {
     required this.text,
     required this.items,
     required this.onSpeak,
+    required this.onStopSpeech,
   });
 
   final String text;
   final dynamic items;
   final Future<void> Function(String text) onSpeak;
+  final Future<void> Function() onStopSpeech;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1183,7 +1198,14 @@ class _AgentTaskListCard extends ConsumerWidget {
               ),
               const SizedBox(height: 10),
               if (list.isNotEmpty) ...[
-                ...list.take(12).map((e) => _AgentTaskListRow(item: e)),
+                ...list
+                    .take(12)
+                    .map(
+                      (e) => _AgentTaskListRow(
+                        item: e,
+                        onStopSpeech: onStopSpeech,
+                      ),
+                    ),
                 if (list.length > 12)
                   Text(
                     '… 另有 ${list.length - 12} 个任务未列出',
@@ -1202,9 +1224,10 @@ class _AgentTaskListCard extends ConsumerWidget {
 }
 
 class _AgentTaskListRow extends ConsumerWidget {
-  const _AgentTaskListRow({required this.item});
+  const _AgentTaskListRow({required this.item, required this.onStopSpeech});
 
   final Map<String, dynamic> item;
+  final Future<void> Function() onStopSpeech;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1248,6 +1271,7 @@ class _AgentTaskListRow extends ConsumerWidget {
           if (id != null && id.isNotEmpty)
             TextButton(
               onPressed: () {
+                unawaited(onStopSpeech());
                 context.push('/task/$id');
                 ref.read(taskRepositoryProvider).touchTaskAfterNavigation(id);
               },
@@ -1692,6 +1716,7 @@ class _PlanPreviewCard extends ConsumerStatefulWidget {
     required this.payload,
     required this.onFollowUp,
     required this.onSpeak,
+    required this.onStopSpeech,
     this.messageId,
     this.initialSubmitted = false,
     this.onPlanConfirmed,
@@ -1703,7 +1728,8 @@ class _PlanPreviewCard extends ConsumerStatefulWidget {
   final bool initialSubmitted;
   final void Function(Map<String, dynamic> payload) onFollowUp;
   final Future<void> Function(String text) onSpeak;
-  final void Function(String messageId)? onPlanConfirmed;
+  final Future<void> Function() onStopSpeech;
+  final void Function(String messageId, List<int> selected)? onPlanConfirmed;
   final void Function(String messageId, List<int> selected)? onSelectionChanged;
 
   @override
@@ -1772,7 +1798,9 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
 
   Future<void> _confirmSelected() async {
     if (_submitted || _creating || _selected.isEmpty) return;
-    final selectedTasks = _selected.map((i) => _taskList[i]).toList();
+    final selectedIndices = _selected.toList()..sort();
+    final selectedTasks = selectedIndices.map((i) => _taskList[i]).toList();
+    await widget.onStopSpeech();
     setState(() => _creating = true);
     try {
       final r = await ref
@@ -1781,6 +1809,7 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
             selectedTasks,
             clientContext: buildAgentClientContext(),
             sourceMessageId: widget.messageId,
+            selectedIndices: selectedIndices,
           );
       await ref.read(taskRepositoryProvider).refreshTasks();
       if (!mounted) return;
@@ -1790,7 +1819,7 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
       });
       final mid = widget.messageId;
       if (mid != null && mid.isNotEmpty) {
-        widget.onPlanConfirmed?.call(mid);
+        widget.onPlanConfirmed?.call(mid, selectedIndices);
       }
       widget.onFollowUp(r);
     } catch (e) {

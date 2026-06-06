@@ -239,6 +239,14 @@ class ConfirmPlanView(APIView):
                 if msg.content_json.get("type") == "plan_preview":
                     merged = dict(msg.content_json)
                     merged["plan_confirmed"] = True
+                    selected_indices = request.data.get("selected_indices")
+                    if isinstance(selected_indices, list):
+                        task_count = len(merged.get("tasks") or [])
+                        cleaned_indices = []
+                        for idx in selected_indices:
+                            if isinstance(idx, int) and 0 <= idx < task_count:
+                                cleaned_indices.append(idx)
+                        merged["plan_selected_indices"] = cleaned_indices
                     msg.content_json = merged
                     msg.save(update_fields=["content_json"])
 
