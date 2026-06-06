@@ -186,6 +186,7 @@ Base URL：`http://localhost:8000/api/v1`
 | 登录 | `POST` | `/auth/login/` |
 | 刷新 Token | `POST` | `/auth/refresh/` |
 | 登出 | `POST` | `/auth/logout/` |
+| 注销账户 | `DELETE` | `/auth/me/` |
 | 创建任务 | `POST` | `/tasks/` |
 | 查询任务列表 | `GET` | `/tasks/?type=block&status=active` |
 | 查询单个任务 | `GET` | `/tasks/{id}/` |

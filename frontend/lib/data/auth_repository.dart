@@ -20,12 +20,14 @@ class AuthRepository {
 
   String? get savedEmail => _prefs.getString(_kEmail);
 
-  String get nickname =>
-      _prefs.getString(_kNickname)?.trim().isNotEmpty == true
-          ? _prefs.getString(_kNickname)!
-          : (_prefs.getString(_kUserName) ?? '用户');
+  String get nickname => _prefs.getString(_kNickname)?.trim().isNotEmpty == true
+      ? _prefs.getString(_kNickname)!
+      : (_prefs.getString(_kUserName) ?? '用户');
 
-  Future<void> _persistSessionFromAuthData(Map<String, dynamic> data, String email) async {
+  Future<void> _persistSessionFromAuthData(
+    Map<String, dynamic> data,
+    String email,
+  ) async {
     final access = data['access_token'] as String?;
     final refresh = data['refresh_token'] as String?;
     if (access == null || access.isEmpty) {
@@ -73,10 +75,7 @@ class AuthRepository {
     if (password.length < 6) {
       throw ArgumentError('密码至少 6 位');
     }
-    final body = <String, dynamic>{
-      'email': email,
-      'password': password,
-    };
+    final body = <String, dynamic>{'email': email, 'password': password};
     final n = name?.trim();
     if (n != null && n.isNotEmpty) {
       body['name'] = n;
@@ -115,7 +114,10 @@ class AuthRepository {
   }
 
   /// POST /auth/change-password/，修改服务端密码。
-  Future<void> changePassword({required String current, required String next}) async {
+  Future<void> changePassword({
+    required String current,
+    required String next,
+  }) async {
     if (current.trim().isEmpty || next.trim().isEmpty) {
       throw ArgumentError('密码不能为空');
     }
@@ -125,12 +127,30 @@ class AuthRepository {
     await _api.request(
       'POST',
       'auth/change-password/',
+      body: {'current_password': current, 'new_password': next},
+      auth: true,
+    );
+  }
+
+  Future<void> deleteAccount({required String currentPassword}) async {
+    if (currentPassword.trim().isEmpty) {
+      throw ArgumentError('请填写当前密码');
+    }
+    final refresh = _prefs.getString(AuthTokenStorage.refreshTokenKey);
+    await _api.request(
+      'DELETE',
+      'auth/me/',
       body: {
-        'current_password': current,
-        'new_password': next,
+        'current_password': currentPassword,
+        if (refresh != null && refresh.isNotEmpty) 'refresh_token': refresh,
       },
       auth: true,
     );
+    await _prefs.remove(AuthTokenStorage.accessTokenKey);
+    await _prefs.remove(AuthTokenStorage.refreshTokenKey);
+    await _prefs.remove(_kEmail);
+    await _prefs.remove(_kNickname);
+    await _prefs.remove(_kUserName);
   }
 
   Future<void> logout() async {
@@ -139,7 +159,9 @@ class AuthRepository {
       await _api.request(
         'POST',
         'auth/logout/',
-        body: refresh != null && refresh.isNotEmpty ? {'refresh_token': refresh} : <String, dynamic>{},
+        body: refresh != null && refresh.isNotEmpty
+            ? {'refresh_token': refresh}
+            : <String, dynamic>{},
         auth: true,
       );
     } catch (_) {}

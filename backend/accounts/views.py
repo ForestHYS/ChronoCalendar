@@ -188,6 +188,31 @@ class ProfileView(APIView):
             {"data": {"id": str(user.id), "name": user.get_full_name() or user.username}}
         )
 
+    def delete(self, request):
+        current = request.data.get("current_password") or ""
+        if not current:
+            return Response(
+                {"error": {"code": "VALIDATION_ERROR", "message": "请填写当前密码"}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = request.user
+        if not user.check_password(current):
+            return Response(
+                {"error": {"code": "INVALID_CREDENTIALS", "message": "当前密码不正确"}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        refresh_token = request.data.get("refresh_token")
+        if refresh_token:
+            try:
+                RefreshToken(refresh_token).blacklist()
+            except Exception:
+                pass
+
+        user.delete()
+        return Response({"data": {"ok": True}})
+
 
 class ChangePasswordView(APIView):
     """

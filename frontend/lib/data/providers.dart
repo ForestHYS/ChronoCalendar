@@ -225,6 +225,16 @@ class AuthNotifier extends ChangeNotifier {
   }) async {
     await _repo.changePassword(current: current, next: next);
   }
+
+  Future<void> deleteAccount({required String currentPassword}) async {
+    final email = _repo.savedEmail;
+    _taskRepo.clearLocalCache();
+    await _agentStore.clearForUser(email);
+    await _repo.deleteAccount(currentPassword: currentPassword);
+    _appSettings.setCurrentUserEmail(null);
+    _sync();
+    notifyListeners();
+  }
 }
 
 /// 昵称等资料变更后递增，供设置页刷新展示（不触发 GoRouter 重建）。
