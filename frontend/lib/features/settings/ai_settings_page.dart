@@ -23,20 +23,14 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
   final _asrBaseUrlC = TextEditingController();
   final _asrApiKeyC = TextEditingController();
   final _asrModelC = TextEditingController();
-  final _ttsBaseUrlC = TextEditingController();
-  final _ttsApiKeyC = TextEditingController();
-  final _ttsModelC = TextEditingController();
-  final _ttsVoiceC = TextEditingController();
 
   bool _loading = true;
   bool _saving = false;
   bool _testing = false;
   bool _showAgentKey = false;
   bool _showAsrKey = false;
-  bool _showTtsKey = false;
   bool _hasAgentKey = false;
   bool _hasAsrKey = false;
-  bool _hasTtsKey = false;
 
   @override
   void initState() {
@@ -52,10 +46,6 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
     _asrBaseUrlC.dispose();
     _asrApiKeyC.dispose();
     _asrModelC.dispose();
-    _ttsBaseUrlC.dispose();
-    _ttsApiKeyC.dispose();
-    _ttsModelC.dispose();
-    _ttsVoiceC.dispose();
     super.dispose();
   }
 
@@ -77,15 +67,10 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
     _agentModelC.text = cfg.modelName;
     _asrBaseUrlC.text = cfg.asrBaseUrl;
     _asrModelC.text = cfg.asrModel;
-    _ttsBaseUrlC.text = cfg.ttsBaseUrl;
-    _ttsModelC.text = cfg.ttsModel;
-    _ttsVoiceC.text = cfg.ttsVoice;
     _hasAgentKey = cfg.hasApiKey;
     _hasAsrKey = cfg.hasAsrApiKey;
-    _hasTtsKey = cfg.hasTtsApiKey;
     _agentApiKeyC.clear();
     _asrApiKeyC.clear();
-    _ttsApiKeyC.clear();
   }
 
   String _normalizeBaseUrl(String raw) {
@@ -111,12 +96,6 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                 ? _asrApiKeyC.text.trim()
                 : null,
             asrModel: _asrModelC.text.trim(),
-            ttsBaseUrl: _normalizeBaseUrl(_ttsBaseUrlC.text),
-            ttsApiKey: _ttsApiKeyC.text.trim().isNotEmpty
-                ? _ttsApiKeyC.text.trim()
-                : null,
-            ttsModel: _ttsModelC.text.trim(),
-            ttsVoice: _ttsVoiceC.text.trim(),
           );
       _applyConfig(cfg);
       if (mounted) {
@@ -151,7 +130,6 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
       final cfg = switch (kind) {
         _KeyKind.agent => await repo.update(apiKey: ''),
         _KeyKind.asr => await repo.update(asrApiKey: ''),
-        _KeyKind.tts => await repo.update(ttsApiKey: ''),
       };
       _applyConfig(cfg);
       if (mounted) {
@@ -199,7 +177,6 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
   Widget build(BuildContext context) {
     final appSettings = ref.watch(appSettingsRepositoryProvider);
     final asrCloud = appSettings.agentAsrProvider == 'cloud';
-    final ttsCloud = appSettings.agentTtsProvider == 'cloud';
 
     return Scaffold(
       backgroundColor: AppColors.surface,
@@ -309,61 +286,6 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
                     ],
                   ],
                 ),
-                const SizedBox(height: 12),
-                _InterfaceCard(
-                  title: '语音合成 TTS',
-                  subtitle: ttsCloud
-                      ? '云端模式通过后端代理调用当前账号的 TTS 接口。'
-                      : '本地模式使用系统语音合成能力，不需要云端接口配置。',
-                  trailing: _VoiceProviderSwitch(
-                    value: appSettings.agentTtsProvider,
-                    onChanged: (value) => ref
-                        .read(appSettingsRepositoryProvider)
-                        .setAgentTtsProvider(value),
-                  ),
-                  children: [
-                    if (ttsCloud) ...[
-                      _CloudConfigFields(
-                        baseUrlController: _ttsBaseUrlC,
-                        apiKeyController: _ttsApiKeyC,
-                        modelController: _ttsModelC,
-                        hasApiKey: _hasTtsKey,
-                        showApiKey: _showTtsKey,
-                        baseUrlLabel: 'TTS Base URL',
-                        apiKeyLabel: 'TTS API Key',
-                        modelLabel: 'TTS Model Name',
-                        defaultModelHint: 'qwen3-tts-flash',
-                        onToggleApiKey: () =>
-                            setState(() => _showTtsKey = !_showTtsKey),
-                        onSubmitted: () => _save('TTS 配置已更新'),
-                      ),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: _ttsVoiceC,
-                        decoration: const InputDecoration(
-                          labelText: 'TTS Voice',
-                          hintText: 'Cherry',
-                        ),
-                        textInputAction: TextInputAction.done,
-                        onSubmitted: (_) => _save('TTS 配置已更新'),
-                      ),
-                      _KeyStatusRow(
-                        hasKey: _hasTtsKey,
-                        label: 'TTS',
-                        onClear: _saving
-                            ? null
-                            : () => _clearApiKey(_KeyKind.tts),
-                      ),
-                      const SizedBox(height: 8),
-                      FilledButton(
-                        onPressed: (_saving || _testing)
-                            ? null
-                            : () => _save('TTS 配置已更新'),
-                        child: Text(_saving ? '保存中...' : '保存 TTS 配置'),
-                      ),
-                    ],
-                  ],
-                ),
               ],
             ),
     );
@@ -372,8 +294,7 @@ class _AiSettingsPageState extends ConsumerState<AiSettingsPage> {
 
 enum _KeyKind {
   agent('Agent'),
-  asr('ASR'),
-  tts('TTS');
+  asr('ASR');
 
   const _KeyKind(this.label);
   final String label;

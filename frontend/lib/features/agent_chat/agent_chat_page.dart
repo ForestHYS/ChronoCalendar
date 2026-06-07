@@ -8,7 +8,6 @@ import '../../core/agent_client_context.dart';
 import '../../core/theme/app_colors.dart';
 import '../../core/ui/app_error_dialog.dart';
 import '../../core/voice/speech_recognizer_service.dart';
-import '../../core/voice/speech_synthesizer_service.dart';
 import '../../data/agent_session_store.dart';
 import '../../data/providers.dart';
 
@@ -67,22 +66,15 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   bool _loading = true;
   bool _listening = false;
   bool _voiceBusy = false;
-  bool _speechRunning = false;
-  int _speechGeneration = 0;
-  String? _speakingText;
   late final SpeechRecognizerService _speechRecognizer;
-  late final SpeechSynthesizerService _speechSynthesizer;
 
   final List<_ChatItem> _items = [];
   List<Map<String, dynamic>> _rawMessages = [];
-  final List<_SpeechJob> _speechQueue = [];
-  final Set<String> _autoSpokenKeys = {};
 
   @override
   void initState() {
     super.initState();
     _speechRecognizer = ref.read(speechRecognizerServiceProvider);
-    _speechSynthesizer = ref.read(speechSynthesizerServiceProvider);
     _restoreSession();
   }
 
@@ -200,7 +192,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
   @override
   void dispose() {
-    unawaited(_stopSpeech(updateUi: false));
     unawaited(
       _speechRecognizer.cancel().then(
         (_) {},
@@ -223,7 +214,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
   Future<void> _toggleListening() async {
     if (_voiceBusy || _sending) return;
-    await _stopSpeech();
     final recognizer = _speechRecognizer;
     if (_listening) {
       setState(() => _voiceBusy = true);
@@ -282,137 +272,11 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     }
   }
 
-  Future<void> _speakText(String text) async {
-    final value = text.trim();
-    if (value.isEmpty) return;
-    if (_speechRunning && _speakingText == value) {
-      await _stopSpeech();
-      return;
-    }
-    await _stopSpeech();
-    await _playSpeech(value);
-  }
-
-  Future<void> _stopSpeech({bool updateUi = true}) async {
-    _speechGeneration++;
-    _speechQueue.clear();
-    if (updateUi && mounted) {
-      setState(() {
-        _speechRunning = false;
-        _speakingText = null;
-      });
-    } else {
-      _speechRunning = false;
-      _speakingText = null;
-    }
-    try {
-      await _speechSynthesizer.stop();
-    } catch (_) {
-      // 页面切换或 provider 正在释放时，停止失败不需要打断交互。
-    }
-  }
-
-  Future<void> _playSpeech(String text) async {
-    final gen = ++_speechGeneration;
-    if (mounted) {
-      setState(() {
-        _speechRunning = true;
-        _speakingText = text;
-      });
-    } else {
-      _speechRunning = true;
-      _speakingText = text;
-    }
-    try {
-      await _speechSynthesizer.speak(text);
-    } catch (e) {
-      if (gen == _speechGeneration) {
-        _speechQueue.clear();
-      }
-      if (mounted) {
-        await showAppErrorDialog(context, title: '语音播放失败', error: e);
-      }
-    } finally {
-      if (gen == _speechGeneration) {
-        if (mounted) {
-          setState(() {
-            _speechRunning = false;
-            _speakingText = null;
-          });
-        } else {
-          _speechRunning = false;
-          _speakingText = null;
-        }
-      }
-    }
-  }
-
-  void _enqueueAutoSpeak(Map<String, dynamic> payload, String key) {
-    if (!ref.read(appSettingsRepositoryProvider).agentAutoSpeak) return;
-    if (!_autoSpokenKeys.add(key)) return;
-    final text = _speakableText(payload);
-    if (text == null || text.trim().isEmpty) return;
-    _speechQueue.add(_SpeechJob(text.trim()));
-    unawaited(_runSpeechQueue());
-  }
-
-  String _speechKey(Map<String, dynamic> payload, String? messageId) {
-    final id = messageId?.trim();
-    if (id != null && id.isNotEmpty) return id;
-    final type = payload['type'] ?? '';
-    final text =
-        _speakableText(payload) ??
-        (payload['message'] as String?) ??
-        (payload['text'] as String?) ??
-        '';
-    return '$type:${text.hashCode}:${payload.hashCode}';
-  }
-
-  Future<void> _runSpeechQueue() async {
-    if (_speechRunning) return;
-    while (mounted &&
-        ref.read(appSettingsRepositoryProvider).agentAutoSpeak &&
-        _speechQueue.isNotEmpty) {
-      final job = _speechQueue.removeAt(0);
-      await _playSpeech(job.text);
-    }
-  }
-
-  String? _speakableText(Map<String, dynamic> payload) {
-    final type = payload['type'];
-    if (type == 'message' || type == 'query_result') {
-      return payload['text'] as String?;
-    }
-    if (type == 'open_editor') {
-      final message =
-          (payload['message'] as String?) ?? (payload['text'] as String?);
-      final draft = payload['task_draft'];
-      if (message != null && message.trim().isNotEmpty) return message;
-      if (draft is Map<String, dynamic>) {
-        final title = draft['title'] as String?;
-        if (title != null && title.trim().isNotEmpty) {
-          return '已为你生成任务草稿：$title';
-        }
-      }
-      return '已为你生成任务草稿';
-    }
-    if (type == 'approval_required') {
-      return payload['summary'] as String? ?? '这个操作需要你的确认';
-    }
-    if (type == 'plan_questions' ||
-        type == 'plan_outline' ||
-        type == 'plan_preview') {
-      return payload['message'] as String?;
-    }
-    return payload['text'] as String?;
-  }
-
   Future<void> _sendInteraction({
     required String userLabel,
     required Map<String, dynamic> interaction,
   }) async {
     if (_sending) return;
-    await _stopSpeech();
     setState(() {
       _sending = true;
       _items.add(_ChatItem.user(userLabel));
@@ -437,7 +301,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
         ref.read(taskRepositoryProvider).refreshTasks();
       }
       _scrollToBottom();
-      _enqueueAutoSpeak(resp, _speechKey(resp, assistantId));
     } catch (e) {
       if (mounted) await showAppErrorDialog(context, title: '发送失败', error: e);
     } finally {
@@ -479,7 +342,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   Future<void> _send() async {
     final text = _inputC.text.trim();
     if (text.isEmpty || _sending) return;
-    await _stopSpeech();
     setState(() {
       _sending = true;
       _items.add(_ChatItem.user(text));
@@ -504,7 +366,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
         ref.read(taskRepositoryProvider).refreshTasks();
       }
       _scrollToBottom();
-      _enqueueAutoSpeak(resp, _speechKey(resp, assistantId));
     } catch (e) {
       if (mounted) await showAppErrorDialog(context, title: '发送失败', error: e);
     } finally {
@@ -524,7 +385,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   }
 
   Future<void> _startNewSession() async {
-    await _stopSpeech();
     if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
@@ -561,7 +421,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
 
   @override
   Widget build(BuildContext context) {
-    final appSettings = ref.watch(appSettingsRepositoryProvider);
     return Scaffold(
       backgroundColor: AppColors.surface,
       appBar: AppBar(
@@ -569,26 +428,10 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
           onPressed: () {
-            unawaited(_stopSpeech());
             context.pop();
           },
         ),
         actions: [
-          IconButton(
-            icon: Icon(
-              appSettings.agentAutoSpeak
-                  ? Icons.volume_up_outlined
-                  : Icons.volume_off_outlined,
-            ),
-            tooltip: appSettings.agentAutoSpeak ? '关闭自动朗读' : '开启自动朗读',
-            onPressed: () async {
-              final next = !appSettings.agentAutoSpeak;
-              if (!next) await _stopSpeech();
-              await ref
-                  .read(appSettingsRepositoryProvider)
-                  .setAgentAutoSpeak(next);
-            },
-          ),
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: '新对话',
@@ -630,8 +473,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
                             initialSubmitted: it.initialSubmitted,
                             onOpenEditor: _openEditorFromDraft,
                             onFollowUp: _appendAssistantPayload,
-                            onSpeak: _speakText,
-                            onStopSpeech: _stopSpeech,
                             onPlanConfirmed: (messageId, selected) {
                               _markAssistantPayload(messageId, {
                                 'plan_confirmed': true,
@@ -712,7 +553,6 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
   }
 
   void _openEditorFromDraft(Map<String, dynamic> draft) {
-    unawaited(_stopSpeech());
     context.push('/task/new', extra: {'agent_draft': draft});
   }
 
@@ -723,14 +563,7 @@ class _AgentChatPageState extends ConsumerState<AgentChatPage> {
     _rawMessages.add({'role': 'assistant', 'content_json': payload});
     unawaited(_persistCache());
     _scrollToBottom();
-    _enqueueAutoSpeak(payload, _speechKey(payload, null));
   }
-}
-
-class _SpeechJob {
-  const _SpeechJob(this.text);
-
-  final String text;
 }
 
 class _ChatItem {
@@ -788,8 +621,6 @@ class _AssistantCard extends ConsumerStatefulWidget {
     required this.onOpenEditor,
     required this.onFollowUp,
     required this.onSendInteraction,
-    required this.onSpeak,
-    required this.onStopSpeech,
     this.messageId,
     this.initialSubmitted = false,
     this.onPlanConfirmed,
@@ -800,8 +631,6 @@ class _AssistantCard extends ConsumerStatefulWidget {
   final String? messageId;
   final void Function(Map<String, dynamic> draft) onOpenEditor;
   final void Function(Map<String, dynamic> payload) onFollowUp;
-  final Future<void> Function(String text) onSpeak;
-  final Future<void> Function() onStopSpeech;
   final Future<void> Function({
     required String userLabel,
     required Map<String, dynamic> interaction,
@@ -863,7 +692,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                 ),
                 if (message.isNotEmpty) ...[
                   const SizedBox(height: 10),
-                  _SpeakableTextRow(text: message, onSpeak: widget.onSpeak),
+                  _AssistantText(text: message),
                 ],
                 if (conflict is Map<String, dynamic> && !_submitted) ...[
                   const SizedBox(height: 10),
@@ -905,12 +734,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
       final text = payload['text'] as String? ?? '我暂时没理解你的意思。';
       final items = payload['items'];
       if (items is List && items.isNotEmpty) {
-        return _AgentTaskListCard(
-          text: text,
-          items: items,
-          onSpeak: widget.onSpeak,
-          onStopSpeech: widget.onStopSpeech,
-        );
+        return _AgentTaskListCard(text: text, items: items);
       }
       return _assistantTextCard(text);
     }
@@ -937,7 +761,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                   style: TextStyle(fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
-                _SpeakableTextRow(text: summary, onSpeak: widget.onSpeak),
+                _AssistantText(text: summary),
                 const SizedBox(height: 12),
                 if (_submitted)
                   Row(
@@ -963,7 +787,6 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                               ? null
                               : () async {
                                   try {
-                                    await widget.onStopSpeech();
                                     final r = await ref
                                         .read(agentRepositoryProvider)
                                         .rejectApproval(approvalId);
@@ -989,7 +812,6 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
                               ? null
                               : () async {
                                   try {
-                                    await widget.onStopSpeech();
                                     final r = await ref
                                         .read(agentRepositoryProvider)
                                         .approveApproval(approvalId);
@@ -1024,12 +846,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
     if (type == 'query_result') {
       final text = payload['text'] as String? ?? '查询结果如下：';
       final items = payload['items'];
-      return _AgentTaskListCard(
-        text: text,
-        items: items,
-        onSpeak: widget.onSpeak,
-        onStopSpeech: widget.onStopSpeech,
-      );
+      return _AgentTaskListCard(text: text, items: items);
     }
 
     if (type == 'plan_questions') {
@@ -1042,7 +859,6 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
             payload['plan_answered'] == true,
         onSendInteraction: widget.onSendInteraction,
         onFollowUp: onFollowUp,
-        onSpeak: widget.onSpeak,
         onDone: widget.onPlanInteractionDone,
       );
     }
@@ -1057,7 +873,6 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
             payload['outline_confirmed'] == true,
         onSendInteraction: widget.onSendInteraction,
         onFollowUp: onFollowUp,
-        onSpeak: widget.onSpeak,
         onDone: widget.onPlanInteractionDone,
       );
     }
@@ -1073,8 +888,6 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
         onFollowUp: onFollowUp,
         onPlanConfirmed: widget.onPlanConfirmed,
         onSelectionChanged: widget.onPlanSelectionChanged,
-        onSpeak: widget.onSpeak,
-        onStopSpeech: widget.onStopSpeech,
       );
     }
 
@@ -1087,7 +900,7 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
       child: Card(
         child: Padding(
           padding: const EdgeInsets.all(14),
-          child: _SpeakableTextRow(text: text, onSpeak: widget.onSpeak),
+          child: _AssistantText(text: text),
         ),
       ),
     );
@@ -1138,49 +951,21 @@ class _AssistantCardState extends ConsumerState<_AssistantCard> {
   }
 }
 
-class _SpeakableTextRow extends StatelessWidget {
-  const _SpeakableTextRow({
-    required this.text,
-    required this.onSpeak,
-    this.style,
-  });
+class _AssistantText extends StatelessWidget {
+  const _AssistantText({required this.text, this.style});
 
   final String text;
   final TextStyle? style;
-  final Future<void> Function(String text) onSpeak;
 
   @override
-  Widget build(BuildContext context) {
-    final value = text.trim();
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(child: Text(text, style: style)),
-        const SizedBox(width: 8),
-        IconButton(
-          tooltip: '朗读',
-          visualDensity: VisualDensity.compact,
-          onPressed: value.isEmpty ? null : () => onSpeak(value),
-          icon: const Icon(Icons.volume_up_outlined),
-        ),
-      ],
-    );
-  }
+  Widget build(BuildContext context) => Text(text, style: style);
 }
 
-/// 任务查询结果：上方文字简述 + 下方每条带「查看详情」。
 class _AgentTaskListCard extends ConsumerWidget {
-  const _AgentTaskListCard({
-    required this.text,
-    required this.items,
-    required this.onSpeak,
-    required this.onStopSpeech,
-  });
+  const _AgentTaskListCard({required this.text, required this.items});
 
   final String text;
   final dynamic items;
-  final Future<void> Function(String text) onSpeak;
-  final Future<void> Function() onStopSpeech;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1198,27 +983,11 @@ class _AgentTaskListCard extends ConsumerWidget {
             children: [
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: Text(text)),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    tooltip: '朗读',
-                    visualDensity: VisualDensity.compact,
-                    onPressed: text.trim().isEmpty ? null : () => onSpeak(text),
-                    icon: const Icon(Icons.volume_up_outlined),
-                  ),
-                ],
+                children: [Expanded(child: Text(text))],
               ),
               const SizedBox(height: 10),
               if (list.isNotEmpty) ...[
-                ...list
-                    .take(12)
-                    .map(
-                      (e) => _AgentTaskListRow(
-                        item: e,
-                        onStopSpeech: onStopSpeech,
-                      ),
-                    ),
+                ...list.take(12).map((e) => _AgentTaskListRow(item: e)),
                 if (list.length > 12)
                   Text(
                     '… 另有 ${list.length - 12} 个任务未列出',
@@ -1237,10 +1006,9 @@ class _AgentTaskListCard extends ConsumerWidget {
 }
 
 class _AgentTaskListRow extends ConsumerWidget {
-  const _AgentTaskListRow({required this.item, required this.onStopSpeech});
+  const _AgentTaskListRow({required this.item});
 
   final Map<String, dynamic> item;
-  final Future<void> Function() onStopSpeech;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1284,7 +1052,6 @@ class _AgentTaskListRow extends ConsumerWidget {
           if (id != null && id.isNotEmpty)
             TextButton(
               onPressed: () {
-                unawaited(onStopSpeech());
                 context.push('/task/$id');
                 ref.read(taskRepositoryProvider).touchTaskAfterNavigation(id);
               },
@@ -1336,7 +1103,6 @@ class _PlanQuestionsCard extends StatefulWidget {
   const _PlanQuestionsCard({
     required this.payload,
     required this.onSendInteraction,
-    required this.onSpeak,
     this.messageId,
     this.initialSubmitted = false,
     this.onFollowUp,
@@ -1351,7 +1117,6 @@ class _PlanQuestionsCard extends StatefulWidget {
     required Map<String, dynamic> interaction,
   })
   onSendInteraction;
-  final Future<void> Function(String text) onSpeak;
   final void Function(Map<String, dynamic> payload)? onFollowUp;
   final void Function(String messageId, Map<String, dynamic> patch)? onDone;
 
@@ -1463,9 +1228,8 @@ class _PlanQuestionsCardState extends State<_PlanQuestionsCard> {
               ),
               if (message.isNotEmpty) ...[
                 const SizedBox(height: 6),
-                _SpeakableTextRow(
+                _AssistantText(
                   text: message,
-                  onSpeak: widget.onSpeak,
                   style: const TextStyle(color: AppColors.onSurfaceVariant),
                 ),
               ],
@@ -1544,7 +1308,6 @@ class _PlanOutlineCard extends StatefulWidget {
   const _PlanOutlineCard({
     required this.payload,
     required this.onSendInteraction,
-    required this.onSpeak,
     this.messageId,
     this.initialSubmitted = false,
     this.onFollowUp,
@@ -1559,7 +1322,6 @@ class _PlanOutlineCard extends StatefulWidget {
     required Map<String, dynamic> interaction,
   })
   onSendInteraction;
-  final Future<void> Function(String text) onSpeak;
   final void Function(Map<String, dynamic> payload)? onFollowUp;
   final void Function(String messageId, Map<String, dynamic> patch)? onDone;
 
@@ -1635,9 +1397,8 @@ class _PlanOutlineCardState extends State<_PlanOutlineCard> {
               ),
               if (message.isNotEmpty) ...[
                 const SizedBox(height: 6),
-                _SpeakableTextRow(
+                _AssistantText(
                   text: message,
-                  onSpeak: widget.onSpeak,
                   style: const TextStyle(color: AppColors.onSurfaceVariant),
                 ),
               ],
@@ -1728,8 +1489,6 @@ class _PlanPreviewCard extends ConsumerStatefulWidget {
   const _PlanPreviewCard({
     required this.payload,
     required this.onFollowUp,
-    required this.onSpeak,
-    required this.onStopSpeech,
     this.messageId,
     this.initialSubmitted = false,
     this.onPlanConfirmed,
@@ -1740,8 +1499,6 @@ class _PlanPreviewCard extends ConsumerStatefulWidget {
   final String? messageId;
   final bool initialSubmitted;
   final void Function(Map<String, dynamic> payload) onFollowUp;
-  final Future<void> Function(String text) onSpeak;
-  final Future<void> Function() onStopSpeech;
   final void Function(String messageId, List<int> selected)? onPlanConfirmed;
   final void Function(String messageId, List<int> selected)? onSelectionChanged;
 
@@ -1813,7 +1570,6 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
     if (_submitted || _creating || _selected.isEmpty) return;
     final selectedIndices = _selected.toList()..sort();
     final selectedTasks = selectedIndices.map((i) => _taskList[i]).toList();
-    await widget.onStopSpeech();
     setState(() => _creating = true);
     try {
       final r = await ref
@@ -1864,9 +1620,8 @@ class _PlanPreviewCardState extends ConsumerState<_PlanPreviewCard> {
               ),
               if (message.isNotEmpty) ...[
                 const SizedBox(height: 6),
-                _SpeakableTextRow(
+                _AssistantText(
                   text: message,
-                  onSpeak: widget.onSpeak,
                   style: const TextStyle(color: AppColors.onSurfaceVariant),
                 ),
               ],
