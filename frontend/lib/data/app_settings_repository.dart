@@ -46,13 +46,13 @@ class AppSettingsRepository extends ChangeNotifier {
 
   String get agentTtsProvider => _voiceProvider(_kAgentTtsProvider);
 
-  void setCurrentUserEmail(String? email) {
+  void setCurrentUserEmail(String? email, {bool notify = true}) {
     final next = _normalizeUserKey(email);
     if (_currentUserKey == next) return;
     _currentUserKey = next;
     _migrateLegacyAgentAutoSpeakForCurrentUser();
     _migrateLegacyVoiceProviderForCurrentUser();
-    notifyListeners();
+    if (notify) notifyListeners();
   }
 
   bool isTodoPinned(String id) => pinnedTodoIds.contains(id);

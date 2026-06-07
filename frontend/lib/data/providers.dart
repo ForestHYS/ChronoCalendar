@@ -139,7 +139,7 @@ class AuthNotifier extends ChangeNotifier {
     this._appSettings,
     this._agentStore,
   ) {
-    _appSettings.setCurrentUserEmail(_repo.savedEmail);
+    _appSettings.setCurrentUserEmail(_repo.savedEmail, notify: false);
     _sync();
   }
 
