@@ -81,12 +81,16 @@ final aiSettingsRepositoryProvider = Provider<AiSettingsRepository>((ref) {
 final speechRecognizerServiceProvider = Provider<SpeechRecognizerService>((
   ref,
 ) {
-  final settings = ref.watch(appSettingsRepositoryProvider);
-  final service = settings.agentAsrProvider == 'local'
+  final provider = ref.watch(
+    appSettingsRepositoryProvider.select(
+      (settings) => settings.agentAsrProvider,
+    ),
+  );
+  final service = provider == 'local'
       ? SystemSpeechRecognizerService()
       : CloudSpeechRecognizerService(ref.watch(apiClientProvider));
   ref.onDispose(() {
-    _ignoreDisposeFuture('speechRecognizer.cancel()', service.cancel);
+    _ignoreDisposeFuture('speechRecognizer.dispose()', service.dispose);
   });
   return service;
 });
@@ -94,16 +98,16 @@ final speechRecognizerServiceProvider = Provider<SpeechRecognizerService>((
 final speechSynthesizerServiceProvider = Provider<SpeechSynthesizerService>((
   ref,
 ) {
-  final settings = ref.watch(appSettingsRepositoryProvider);
-  final service = settings.agentTtsProvider == 'local'
+  final provider = ref.watch(
+    appSettingsRepositoryProvider.select(
+      (settings) => settings.agentTtsProvider,
+    ),
+  );
+  final service = provider == 'local'
       ? SystemSpeechSynthesizerService()
       : CloudSpeechSynthesizerService(ref.watch(apiClientProvider));
   ref.onDispose(() {
-    if (service is CloudSpeechSynthesizerService) {
-      _ignoreDisposeFuture('speechSynthesizer.dispose()', service.dispose);
-    } else {
-      _ignoreDisposeFuture('speechSynthesizer.stop()', service.stop);
-    }
+    _ignoreDisposeFuture('speechSynthesizer.dispose()', service.dispose);
   });
   return service;
 });

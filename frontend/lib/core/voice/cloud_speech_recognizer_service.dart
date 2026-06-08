@@ -17,6 +17,8 @@ class CloudSpeechRecognizerService implements SpeechRecognizerService {
 
   bool _available = false;
   bool _listening = false;
+  bool _disposed = false;
+  int _generation = 0;
   String? _recordingPath;
   StreamSubscription<Uint8List>? _streamSub;
   final List<int> _streamBytes = [];
@@ -32,6 +34,7 @@ class CloudSpeechRecognizerService implements SpeechRecognizerService {
 
   @override
   Future<bool> initialize() async {
+    if (_disposed) return false;
     _available = await _recorder.hasPermission();
     return _available;
   }
@@ -43,37 +46,50 @@ class CloudSpeechRecognizerService implements SpeechRecognizerService {
     SpeechErrorCallback? onError,
     String? localeId,
   }) async {
+    if (_disposed) throw StateError('语音服务已释放');
     if (_listening) return true;
     final ok = await initialize();
     if (!ok) return false;
 
+    final gen = ++_generation;
     _onResult = onResult;
     _onDone = onDone;
     _onError = onError;
 
-    if (kIsWeb) {
-      _streamBytes.clear();
-      final stream = await _recorder.startStream(
-        const RecordConfig(
-          encoder: AudioEncoder.pcm16bits,
-          sampleRate: 16000,
-          numChannels: 1,
-        ),
-      );
-      _streamSub = stream.listen(_streamBytes.addAll);
-    } else {
-      final stamp = DateTime.now().microsecondsSinceEpoch;
-      final path =
-          '${Directory.systemTemp.path}${Platform.pathSeparator}chrono_voice_$stamp.wav';
-      _recordingPath = path;
-      await _recorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.wav,
-          sampleRate: 16000,
-          numChannels: 1,
-        ),
-        path: path,
-      );
+    try {
+      if (kIsWeb) {
+        _streamBytes.clear();
+        final stream = await _recorder.startStream(
+          const RecordConfig(
+            encoder: AudioEncoder.pcm16bits,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+        );
+        _streamSub = stream.listen((bytes) {
+          if (gen == _generation) _streamBytes.addAll(bytes);
+        });
+      } else {
+        final stamp = DateTime.now().microsecondsSinceEpoch;
+        final path =
+            '${Directory.systemTemp.path}${Platform.pathSeparator}chrono_voice_$stamp.wav';
+        _recordingPath = path;
+        await _recorder.start(
+          const RecordConfig(
+            encoder: AudioEncoder.wav,
+            sampleRate: 16000,
+            numChannels: 1,
+          ),
+          path: path,
+        );
+      }
+    } catch (_) {
+      if (gen == _generation) {
+        _listening = false;
+        _streamBytes.clear();
+        _clearCallbacks();
+      }
+      rethrow;
     }
     _listening = true;
     return true;
@@ -82,6 +98,8 @@ class CloudSpeechRecognizerService implements SpeechRecognizerService {
   @override
   Future<void> stop() async {
     if (!_listening) return;
+    final gen = _generation;
+    final originalRecordingPath = _recordingPath;
     String? path;
     try {
       _listening = false;
@@ -103,6 +121,7 @@ class CloudSpeechRecognizerService implements SpeechRecognizerService {
         if (!await file.exists()) return;
         bytes = await file.readAsBytes();
       }
+      if (gen != _generation || _disposed) return;
       final data = await _api.request(
         'POST',
         'agent/asr/',
@@ -117,25 +136,54 @@ class CloudSpeechRecognizerService implements SpeechRecognizerService {
       }
       _onDone?.call();
     } catch (e) {
-      _onError?.call(e);
+      if (gen == _generation && !_disposed) {
+        _onError?.call(e);
+      }
     } finally {
-      _listening = false;
-      await _deleteRecording(path ?? _recordingPath);
-      _recordingPath = null;
+      final cleanupPath = path ?? originalRecordingPath;
+      if (gen == _generation) {
+        _listening = false;
+        _recordingPath = null;
+        _streamBytes.clear();
+        _clearCallbacks();
+      }
+      await _deleteRecording(cleanupPath);
     }
   }
 
   @override
   Future<void> cancel() async {
-    if (_listening) {
-      await _recorder.cancel();
+    _generation++;
+    try {
+      if (_listening && !_disposed) {
+        await _recorder.cancel();
+      }
+    } finally {
+      await _streamSub?.cancel();
+      _streamSub = null;
+      _streamBytes.clear();
+      _listening = false;
+      await _deleteRecording(_recordingPath);
+      _recordingPath = null;
+      _clearCallbacks();
     }
-    await _streamSub?.cancel();
-    _streamSub = null;
-    _streamBytes.clear();
-    _listening = false;
-    await _deleteRecording(_recordingPath);
-    _recordingPath = null;
+  }
+
+  @override
+  Future<void> dispose() async {
+    if (_disposed) return;
+    try {
+      await cancel();
+    } finally {
+      _disposed = true;
+      await _recorder.dispose();
+    }
+  }
+
+  void _clearCallbacks() {
+    _onResult = null;
+    _onDone = null;
+    _onError = null;
   }
 
   Future<void> _deleteRecording(String? path) async {

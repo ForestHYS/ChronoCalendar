@@ -52,6 +52,9 @@ class SystemSpeechSynthesizerService implements SpeechSynthesizerService {
     _finishCurrent();
   }
 
+  @override
+  Future<void> dispose() => stop();
+
   void _finishCurrent() {
     _speaking = false;
     final completion = _completion;

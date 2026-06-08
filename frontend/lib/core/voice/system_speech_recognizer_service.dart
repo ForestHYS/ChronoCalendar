@@ -10,6 +10,8 @@ class SystemSpeechRecognizerService implements SpeechRecognizerService {
 
   bool _initialized = false;
   bool _available = false;
+  bool _disposed = false;
+  int _generation = 0;
   SpeechDoneCallback? _onDone;
   SpeechErrorCallback? _onError;
 
@@ -21,15 +23,20 @@ class SystemSpeechRecognizerService implements SpeechRecognizerService {
 
   @override
   Future<bool> initialize() async {
+    if (_disposed) return false;
     if (_initialized) return _available;
     _available = await _speech.initialize(
       onStatus: (status) {
         if (status == 'done' || status == 'notListening') {
-          _onDone?.call();
+          final onDone = _onDone;
+          _clearCallbacks();
+          onDone?.call();
         }
       },
       onError: (SpeechRecognitionError error) {
-        _onError?.call(StateError(error.errorMsg));
+        final onError = _onError;
+        _clearCallbacks();
+        onError?.call(StateError(error.errorMsg));
       },
     );
     _initialized = true;
@@ -46,29 +53,60 @@ class SystemSpeechRecognizerService implements SpeechRecognizerService {
     final ok = await initialize();
     if (!ok) return false;
 
-    _onDone = onDone;
-    _onError = onError;
-    await _speech.listen(
-      listenOptions: stt.SpeechListenOptions(
-        localeId: localeId,
-        listenMode: stt.ListenMode.confirmation,
-        partialResults: true,
-        cancelOnError: true,
-      ),
-      onResult: (result) {
-        onResult(result.recognizedWords, result.finalResult);
-      },
-    );
+    final gen = ++_generation;
+    _onDone = () {
+      if (gen == _generation) onDone?.call();
+    };
+    _onError = (error) {
+      if (gen == _generation) onError?.call(error);
+    };
+    try {
+      await _speech.listen(
+        listenOptions: stt.SpeechListenOptions(
+          localeId: localeId,
+          listenMode: stt.ListenMode.confirmation,
+          partialResults: true,
+          cancelOnError: true,
+        ),
+        onResult: (result) {
+          if (gen != _generation) return;
+          onResult(result.recognizedWords, result.finalResult);
+        },
+      );
+    } catch (_) {
+      if (gen == _generation) _clearCallbacks();
+      rethrow;
+    }
     return true;
   }
 
   @override
   Future<void> stop() async {
-    await _speech.stop();
+    _generation++;
+    if (!_disposed) {
+      await _speech.stop();
+    }
+    _clearCallbacks();
   }
 
   @override
   Future<void> cancel() async {
-    await _speech.cancel();
+    _generation++;
+    if (!_disposed) {
+      await _speech.cancel();
+    }
+    _clearCallbacks();
+  }
+
+  @override
+  Future<void> dispose() async {
+    if (_disposed) return;
+    await cancel();
+    _disposed = true;
+  }
+
+  void _clearCallbacks() {
+    _onDone = null;
+    _onError = null;
   }
 }

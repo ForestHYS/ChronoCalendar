@@ -18,6 +18,7 @@ class CloudSpeechSynthesizerService implements SpeechSynthesizerService {
   StreamSubscription<void>? _completeSub;
 
   bool _speaking = false;
+  bool _disposed = false;
   int _generation = 0;
   Completer<void>? _completion;
 
@@ -26,6 +27,7 @@ class CloudSpeechSynthesizerService implements SpeechSynthesizerService {
 
   @override
   Future<void> speak(String text, {String? localeId}) async {
+    if (_disposed) throw StateError('语音服务已释放');
     final value = text.trim();
     if (value.isEmpty) return;
 
@@ -41,6 +43,10 @@ class CloudSpeechSynthesizerService implements SpeechSynthesizerService {
         auth: true,
       );
       if (_generation != gen) {
+        if (!completion.isCompleted) completion.complete();
+        return;
+      }
+      if (_disposed) {
         if (!completion.isCompleted) completion.complete();
         return;
       }
@@ -64,7 +70,9 @@ class CloudSpeechSynthesizerService implements SpeechSynthesizerService {
   @override
   Future<void> stop() async {
     _generation++;
-    await _player.stop();
+    if (!_disposed) {
+      await _player.stop();
+    }
     _finishCurrent();
   }
 
@@ -77,8 +85,18 @@ class CloudSpeechSynthesizerService implements SpeechSynthesizerService {
     }
   }
 
+  @override
   Future<void> dispose() async {
+    if (_disposed) return;
+    _generation++;
+    _disposed = true;
+    try {
+      await _player.stop();
+    } finally {
+      _finishCurrent();
+    }
     await _completeSub?.cancel();
+    _completeSub = null;
     await _player.dispose();
   }
 }

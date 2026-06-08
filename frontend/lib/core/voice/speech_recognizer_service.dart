@@ -18,4 +18,6 @@ abstract class SpeechRecognizerService {
   Future<void> stop();
 
   Future<void> cancel();
+
+  Future<void> dispose();
 }

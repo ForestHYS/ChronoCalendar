@@ -20,9 +20,39 @@ class AgentSessionStore {
   String _sessionIdPrefKey(String? email) =>
       'agent_last_session_id_${_emailKey(email)}';
 
+  String _snapshotPrefKey(String? email) =>
+      'agent_chat_snapshot_${_emailKey(email)}';
+
   Future<File> _snapshotFile(String? email) async {
     final dir = await getApplicationDocumentsDirectory();
     return File('${dir.path}/agent_chat_${_emailKey(email)}.json');
+  }
+
+  Future<String?> _readSnapshotRaw(String? email) async {
+    if (kIsWeb) {
+      return _prefs.getString(_snapshotPrefKey(email));
+    }
+    final file = await _snapshotFile(email);
+    if (!await file.exists()) return null;
+    return file.readAsString();
+  }
+
+  Future<void> _writeSnapshotRaw(String? email, String payload) async {
+    if (kIsWeb) {
+      await _prefs.setString(_snapshotPrefKey(email), payload);
+      return;
+    }
+    final file = await _snapshotFile(email);
+    await file.writeAsString(payload, flush: true);
+  }
+
+  Future<void> _deleteSnapshot(String? email) async {
+    if (kIsWeb) {
+      await _prefs.remove(_snapshotPrefKey(email));
+      return;
+    }
+    final file = await _snapshotFile(email);
+    if (await file.exists()) await file.delete();
   }
 
   Future<String?> getLastSessionId(String? email) async {
@@ -42,14 +72,14 @@ class AgentSessionStore {
   /// 读取消息快照；[sessionId] 与存储不一致时返回 null。
   Future<AgentChatSnapshot?> loadSnapshot(String? email) async {
     try {
-      final file = await _snapshotFile(email);
-      if (!await file.exists()) return null;
-      final decoded = jsonDecode(await file.readAsString());
+      final raw = await _readSnapshotRaw(email);
+      if (raw == null || raw.isEmpty) return null;
+      final decoded = jsonDecode(raw);
       if (decoded is! Map<String, dynamic>) return null;
       final sid = decoded['session_id'] as String?;
-      final raw = decoded['messages'];
-      if (sid == null || sid.isEmpty || raw is! List) return null;
-      final messages = raw.whereType<Map<String, dynamic>>().toList();
+      final rawMessages = decoded['messages'];
+      if (sid == null || sid.isEmpty || rawMessages is! List) return null;
+      final messages = rawMessages.whereType<Map<String, dynamic>>().toList();
       return AgentChatSnapshot(sessionId: sid, messages: messages);
     } catch (e, st) {
       debugPrint('AgentSessionStore.loadSnapshot failed: $e\n$st');
@@ -63,13 +93,12 @@ class AgentSessionStore {
     required List<Map<String, dynamic>> messages,
   }) async {
     try {
-      final file = await _snapshotFile(email);
       final payload = jsonEncode({
         'session_id': sessionId,
         'saved_at': DateTime.now().toIso8601String(),
         'messages': messages,
       });
-      await file.writeAsString(payload, flush: true);
+      await _writeSnapshotRaw(email, payload);
       await setLastSessionId(email, sessionId);
     } catch (e, st) {
       debugPrint('AgentSessionStore.saveSnapshot failed: $e\n$st');
@@ -79,8 +108,7 @@ class AgentSessionStore {
   Future<void> clearForUser(String? email) async {
     await clearLastSessionId(email);
     try {
-      final file = await _snapshotFile(email);
-      if (await file.exists()) await file.delete();
+      await _deleteSnapshot(email);
     } catch (e, st) {
       debugPrint('AgentSessionStore.clearForUser failed: $e\n$st');
     }
@@ -88,10 +116,7 @@ class AgentSessionStore {
 }
 
 class AgentChatSnapshot {
-  const AgentChatSnapshot({
-    required this.sessionId,
-    required this.messages,
-  });
+  const AgentChatSnapshot({required this.sessionId, required this.messages});
 
   final String sessionId;
   final List<Map<String, dynamic>> messages;

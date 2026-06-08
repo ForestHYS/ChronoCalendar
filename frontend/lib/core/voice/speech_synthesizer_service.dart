@@ -4,4 +4,6 @@ abstract class SpeechSynthesizerService {
   Future<void> speak(String text, {String? localeId});
 
   Future<void> stop();
+
+  Future<void> dispose();
 }
