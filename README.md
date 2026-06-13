@@ -115,7 +115,6 @@ ChronoCalendar/
 │
 ├── assets/                   # README 图片资源
 ├── deploy/                   # 部署配置
-├── temp/                     # 临时文件，不提交
 ├── README.md                 # 项目说明文档
 ├── api.md                    # API / 数据库 / Agent 合并文档
 └── deploy.md                 # 部署说明
@@ -165,6 +164,8 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:8000
 `API_BASE_URL` 只填写后端根地址，不包含 `/api/v1`。
 
 ---
+
+如果需要使用服务器docker部署后端，请参考 [deploy.md](deploy.md) 中的部署说明。
 
 ## API 说明
 
@@ -289,8 +290,6 @@ NormalizeInput → ClassifyIntent → DecideByIntent → RunTool → ComposeResp
 
 ## 开发约定
 
-- `main` 为集成分支，开发分支当前为 `devLX`
-- `temp/` 仅用于截图与临时素材，不提交
 - 后端新增成功响应复用 `tasks.views.ok()`，错误响应复用 `err()` 或统一异常结构
 - 新增任务字段时，同步更新后端模型/序列化器、`api.md`、前端 `domain/models/task.dart` 与 `data/task_json.dart`
 - 前端状态管理使用 Riverpod；任务与标签由 `TaskRepository` 缓存，页面优先读本地仓库状态
