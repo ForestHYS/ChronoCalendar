@@ -73,7 +73,7 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy backend failed: $LASTEXITCODE" }
 robocopy deploy (Join-Path $stage "deploy") /E /XD certs | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy deploy failed: $LASTEXITCODE" }
 
-Copy-Item -Path @("docker-compose.yml", ".env.example", "deploy.md") -Destination $stage
+Copy-Item -Path @("docker-compose.yml", ".env.example", "README.md", "api.md", "deploy.md") -Destination $stage
 Compress-Archive -Path "$stage\*" -DestinationPath $zip -Force
 Write-Host "Created $zip"
 ```
@@ -160,6 +160,8 @@ backend/
 deploy/
 docker-compose.yml
 .env.example
+README.md
+api.md
 deploy.md
 ```
 
